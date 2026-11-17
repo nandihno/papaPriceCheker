@@ -1,0 +1,17 @@
+# Xcode user-specific state and build products
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.swiftpm/xcode/xcuserdata/
+
+# Machine-local configuration and credentials
+.env
+.env.*
+*.local.xcconfig
+Local.xcconfig
+*.p8
+*.p12
+*.pem
+*.mobileprovision

@@ -1,0 +1,245 @@
+# Papa PriceChecker implementation
+
+This document describes the iOS app and the grocery database it consumes. It reflects the source in this repository and the migrations and ingestion function in the separate `woolworths-actor` project, inspected on 2026-11-17. The documented table and view columns were also checked using read-only requests to the deployed Supabase API. API access confirms that those columns can be selected; it does **not** prove the deployed indexes, grants, policies, constraints or full security configuration match the local migrations.
+
+## Purpose and scope
+
+Papa PriceChecker is a read-only iOS and iPadOS app for finding products tracked by the existing Woolworths ingestion pipeline and viewing their recorded price history. It does not search the retailer's entire catalogue: only products collected by the configured actor appear. The app does not schedule or perform scraping, modify product data, manage accounts, or deploy backend changes.
+
+The user can:
+
+- Browse and search products, load additional results and refresh the list.
+- Open a product to see the latest recorded price, retailer link, promotion, comparison unit price, availability and last-seen time when supplied.
+- View recorded price snapshots in a chart, switch between one month, three months, one year and all history, and inspect individual snapshots.
+- See the lowest and highest recorded price, count of snapshots with a price, and changes from the immediately preceding snapshot when both prices are known.
+
+## Technology and project structure
+
+| Area | Current implementation |
+| --- | --- |
+| App | Native Swift and SwiftUI; balanced `NavigationSplitView` master-detail layout, searchable sidebar column, adaptive vertical/horizontal toolbars with `visibilityPriority`, `reservedRegions(kind: .division)` adaptation, and Light/Dark/High Contrast `Theme` tokens |
+| Chart | Apple's Swift Charts, with linear trend lines, gradient area fill, lowest-price rule mark, points, and interactive `.chartXSelection` scrubbing |
+| Icons and images | SF Symbols, a universal 1024 × 1024 app icon asset, adaptive Light/Dark `AccentColor`, and `AsyncImage` for product images (white card for loaded photos, tinted card for placeholders) |
+| Networking | Foundation `URLSession` and `URLComponents`, using HTTPS and Supabase's PostgREST API directly |
+| Data decoding | `Decodable` and `JSONDecoder`, with ISO 8601 timestamp parsing, including fractional seconds |
+| Concurrency | Swift `async`/`await` and SwiftUI `.task` |
+| Persistence | No app-owned database or persistent offline cache is implemented |
+| Dependencies | No third-party Swift packages; in particular, this app does not currently use the Supabase Swift SDK |
+| Xcode target | `Papa PriceChecker`, bundle identifier `org.nando.Papa-PriceChecker`, iPhone and iPad, minimum iOS/iPadOS 27.2 |
+| Swift settings | Project specifies Swift language mode `5.0`, approachable concurrency and `MainActor` default isolation |
+
+The project was built with Xcode 27.2. The target's deployment version is inherited from the initial project setup, not a claim that the app needs a feature exclusive to that release.
+
+| File | Responsibility |
+| --- | --- |
+| `Papa PriceChecker/Papa_PriceCheckerApp.swift` | App entry point and root window |
+| `Papa PriceChecker/ContentView.swift` | Adaptive `NavigationSplitView` browse/detail shell, price movement alert, filter modes, gentle red/green price columns, product detail, interactive chart, snapshot list, loading and error states |
+| `Papa PriceChecker/GroceryService.swift` | Supabase REST requests (`products(search:offset:)`, `products(ids:)`, `priceChangeSummaries()`, `history(productID:)`) and `GroceryProduct` / `PriceRecord` response models |
+| `Papa PriceChecker/PriceHistoryInsights.swift` | `PriceChangeSummary`, `PriceDirection`, previous-snapshot price comparison, recorded minimum/maximum and priced-snapshot count |
+| `Papa PriceChecker/Assets.xcassets/` | App icon and adaptive Light/Dark `AccentColor` assets |
+| `Tests/PriceHistoryChecks.swift` | Standalone checks for history decoding and calculations; not an Xcode test target |
+| `Papa PriceChecker.xcodeproj/` | Xcode project and build settings |
+
+The backend source is maintained separately at `/Users/fernandodeleon/dev/NandoProjects/GroceryActor-apify/woolworths-actor`. Its `architecture.md`, `supabase/migrations/` and `supabase/functions/ingest-apify-run/index.ts` are the source references for the schema and ingestion behavior below. Backend migrations are not maintained or deployed from the iOS app repository.
+
+## End-to-end data flow
+
+```mermaid
+flowchart LR
+    W[Woolworths product data] --> A[Apify Woolworths actor]
+    A --> D[Apify dataset]
+    D --> E[Supabase ingest-apify-run Edge Function]
+    E --> R[(scrape_runs)]
+    E --> P[(products)]
+    E --> H[(price_history)]
+    P --> V[v_latest_prices]
+    H --> V
+    V --> I[Price Checker iOS app]
+    H --> I
+```
+
+1. The Apify actor collects configured Woolworths search results and writes an Apify dataset. A successful actor-run webhook invokes the Supabase Edge Function.
+2. The function fetches the dataset and run details, deduplicates products by `(chain, stockcode)`, and upserts the run and product catalogue. It updates `products.last_seen_at` when a product is encountered.
+3. The function compares each product with its latest history record. It writes a snapshot for a new product, or if `price`, `was_price`, `is_on_special`, `is_half_price`, `promotion` or `is_available` has changed.
+4. Supabase exposes the `v_latest_prices` view and `price_history` table through PostgREST. The app makes read-only requests with the project's publishable key.
+
+The expected upstream schedule is one run each day at 9 am, as described by the project owner. This app does not configure or verify that schedule, its time zone, or whether a particular run succeeds. `last_seen_at` is the product's last recorded encounter, not a guarantee that the latest price is still available at a specific store.
+
+## App requests and UI behavior
+
+### Browse and search
+
+`GroceryService.products(search:offset:)` reads `public.v_latest_prices`, selecting `product_id`, `name`, `brand`, `package_size`, `price`, `was_price`, `is_on_special`, `promotion`, `cup_string`, `is_available`, `scraped_at`, `last_seen_at`, `image_url`, `url` and `region`. When browsing or refreshing, `GroceryService.priceChangeSummaries()` reads `(product_id, price)` in chronological order from `public.price_history` to compute `PriceChangeSummary` (previous vs. latest price when both are known), and `GroceryService.products(ids:)` fetches the latest rows for all products with a recorded increase or decrease.
+
+- An empty search browses the view and prioritizes items with recorded price increases or decreases at the top so changes are immediately visible on launch. A nonempty search applies a case-insensitive `name` filter; it does not search brand or barcode separately.
+- The UI waits 300 ms after search text changes before querying via a root `.task(id: search)` modifier on `NavigationSplitView` so display-pose transitions and detail navigation do not retrigger fetches. Results are ordered by `name` and `product_id`, with a page size of 50 and an explicit **Load more products** action.
+- An adaptive hero card summarizes loaded and on-special counts in regular vertical height and collapses into a compact single-line strip when `verticalSizeClass == .compact` or during an active search.
+- Below the hero card when browsing, an interactive two-column **Price Movement Alert** shows catalog-wide **Price Drops** (gentle green with `arrow.down.right.circle.fill`) and **Price Rises** (gentle red with `arrow.up.right.circle.fill`) counts since the previous recorded snapshot, and tapping either card filters the list directly.
+- Loaded products can be filtered between **All**, **Drops**, **Rises**, and **Specials** via horizontal filter chips or the sidebar toolbar filter menu (`visibilityPriority(.high)`), alongside refresh (`visibilityPriority(.low)`).
+- The list can be pulled to refresh. Loading, empty, filter-empty, error and retry states are provided.
+- Product rows present brand overline, full wrapping product name, package size with unit price, price-change/specials/availability pills, a trailing price column tinted gentle red (`Theme.priceRiseColumnSurface`) with `arrow.up.right.circle.fill` for increases or gentle green (`Theme.priceDropColumnSurface`) with `arrow.down.right.circle.fill` for reductions (plus previous snapshot price), Accessibility Dynamic Type stacking, and split-view selection highlighting.
+- Product images are loaded from the URL in the catalogue onto a crisp white card; products without a loaded image display a soft brand-tinted basket placeholder.
+
+### Product history
+
+`GroceryService.history(productID:)` reads `public.price_history` for one product, in `scraped_at` then `id` ascending order, fetching pages of 500 until the final page. It selects the snapshot ID, price and was price, savings, discount percentage, special and multibuy flags, promotion, order limit, comparison unit-price fields, availability, region and scrape time. Rows are displayed newest first.
+
+`ProductDetail` serves as the `NavigationSplitView` detail column (collapsing into a pushed screen on compact displays and rendering beside the sidebar on regular displays). When `reservedRegions(kind: .division)` reports an active vertical fold division inside the detail container, `ProductDetail` places the header and chart cards side by side across the division and widens grid spacing to clear the hinge.
+
+The chart range affects the chart only. Summary statistics (lowest recorded, highest recorded, latest recorded, and price snapshots) are presented in an even two-column `LazyVGrid` (collapsing to one column at Accessibility Dynamic Type sizes) and cover all loaded history. The chart includes the last known observation before a selected range when the recorded last-seen time reaches that range. It extends the final recorded price only through the last-seen time, rather than assuming it stayed valid until now. If any historical snapshot has a missing price, the chart displays points rather than connecting across unknown prices; otherwise it renders a trend line with a soft gradient area fill, a dashed lowest-price rule mark, and interactive `.chartXSelection` scrubbing. Each record's up/down amount is calculated against the immediately preceding snapshot; it is omitted if either price is missing. The retailer's `was_price` is a separate comparison price and is not assumed to equal the previous snapshot.
+
+The record list exposes promotion and saving information when supplied, with expandable was price, discount, unit price, multibuy, order-limit, availability and region details. Null or empty values are generally omitted. The latest product detail uses `last_seen_at` for “Last checked”; a history record's `scraped_at` is when that particular recorded state was observed. The product header card shows a gentle-red or gentle-green price change banner with iconography whenever the latest price differs from the previous recorded snapshot, and provides **View at Woolworths** and **Share** actions when an HTTPS product URL is available.
+
+### Important interpretation of snapshots
+
+History is **change-only**, not a daily time series. The pipeline does not create a new history row solely because `savings_amount`, `is_multibuy`, `product_limit`, unit-price fields, `source` or `region` changes. Those fields reflect what the pipeline wrote when a snapshot was created; they are not necessarily refreshed on each later product check. An unchanged shelf price can therefore have an old snapshot date and a newer product last-seen time. A single snapshot cannot establish earlier price behavior, and the lowest/highest figures are only for captured history.
+
+Prices are formatted as Australian dollars in the app. Availability and price can vary by region, retailer conditions and time. The database represents currency values as PostgreSQL `numeric`; the current Swift decoding and calculations use `Double`.
+
+## Supabase configuration and security
+
+- The client targets project `grocery-prices`, project reference `wntllezsoavodlrpqcue`, at `https://wntllezsoavodlrpqcue.supabase.co/rest/v1`.
+- The project URL and a **publishable** key are currently embedded in `GroceryService.swift`, and the client sends the key in the `apikey` and bearer authorization headers. The publishable key is a public client identifier, not a secret; never put a secret or service-role key in the iOS bundle.
+- The app has no sign-in flow. Anonymous reads of its product and price-history queries were tested successfully. User accounts are not necessary for the current public read-only experience.
+- The backend migration enables row-level security on all three tables and defines `SELECT` policies for the `anon` and `authenticated` roles. It does not define public write policies. Both views use `security_invoker = true` in the local migrations, so callers are subject to the underlying table permissions and policies.
+- The migration also grants anonymous read policy access to `scrape_runs`, although this app does not query that table. Decide whether all run metadata should remain public when auditing the backend.
+- Read-only requests cannot establish the absence of write access or prove deployed RLS configuration. Review live grants, policies, view settings and exposed columns independently before release; do not rely on hiding the publishable key for security.
+- Administrative ingestion credentials belong only in the backend environment. The iOS app makes no calls to the ingestion function.
+
+## Database schema
+
+The following definitions come from backend migrations `20261117000001_create_grocery_schema.sql` and `20261117000002_add_last_seen_to_views.sql`. All tables and views are in `public`. A nullable column can contain SQL `NULL`; `NOT NULL` and defaults are as specified by the migrations. Monetary and comparison-price values are in Australian dollars unless otherwise stated.
+
+```mermaid
+erDiagram
+    PRODUCTS ||--o{ PRICE_HISTORY : "product_id"
+    SCRAPE_RUNS ||--o{ PRICE_HISTORY : "run_id"
+    PRODUCTS {
+        uuid id PK
+        text chain
+        bigint stockcode
+        text name
+        timestamptz last_seen_at
+    }
+    SCRAPE_RUNS {
+        uuid id PK
+        text apify_run_id
+        text status
+        timestamptz ingested_at
+    }
+    PRICE_HISTORY {
+        uuid id PK
+        uuid product_id FK
+        uuid run_id FK
+        numeric price
+        numeric was_price
+        timestamptz scraped_at
+    }
+```
+
+### `products`
+
+One catalogue row per `(chain, stockcode)`. `v_latest_prices` joins this table to history. The app does not query `products` directly.
+
+| Column | PostgreSQL type | Null / default | Meaning |
+| --- | --- | --- | --- |
+| `id` | `uuid` | NOT NULL, `gen_random_uuid()` | Primary key |
+| `chain` | `text` | NOT NULL, `'woolworths'` | Retail chain; part of unique key |
+| `stockcode` | `bigint` | NOT NULL | Retailer product code; unique with `chain` |
+| `barcode` | `text` | nullable | Product barcode |
+| `name` | `text` | NOT NULL | Product name |
+| `brand` | `text` | nullable | Brand |
+| `package_size` | `text` | nullable | Pack size text |
+| `departments` | `text[]` | nullable | Retailer departments |
+| `category` | `text` | nullable | Product category |
+| `url` | `text` | nullable | Retailer product URL |
+| `image_url` | `text` | nullable | Product image URL |
+| `first_seen_at` | `timestamptz` | NOT NULL, `now()` | When the catalogue row was first created |
+| `last_seen_at` | `timestamptz` | NOT NULL, `now()` | Product's latest recorded scrape/encounter |
+| `updated_at` | `timestamptz` | NOT NULL, `now()` | Last catalogue update timestamp |
+
+### `price_history`
+
+A row is a captured product state, created on first observation or when one of the monitored fields changes. The app queries this table by `product_id`.
+
+| Column | PostgreSQL type | Null / default | Meaning |
+| --- | --- | --- | --- |
+| `id` | `uuid` | NOT NULL, `gen_random_uuid()` | Primary key |
+| `product_id` | `uuid` | NOT NULL | References `products.id`; cascade delete |
+| `run_id` | `uuid` | NOT NULL | References `scrape_runs.id`; cascade delete; unique with `product_id` |
+| `chain` | `text` | NOT NULL, `'woolworths'` | Retail chain |
+| `stockcode` | `bigint` | NOT NULL | Retailer product code |
+| `price` | `numeric(10,2)` | nullable | Recorded shelf price |
+| `was_price` | `numeric(10,2)` | nullable | Retailer's comparison price, not necessarily the prior recorded price |
+| `savings_amount` | `numeric(10,2)` | nullable | Retailer-provided amount saved |
+| `discount_pct` | `numeric(5,2)` | generated, nullable | Rounded percentage `(was_price - price) / was_price × 100` when `was_price > price`, `was_price > 0` and `price` is present; otherwise null |
+| `is_on_special` | `boolean` | NOT NULL, `false` | Recorded special flag |
+| `is_half_price` | `boolean` | NOT NULL, `false` | Recorded half-price flag |
+| `promotion` | `text` | nullable | Promotion description |
+| `is_multibuy` | `boolean` | NOT NULL, `false` | Recorded multibuy flag |
+| `product_limit` | `integer` | nullable | Recorded retailer order limit |
+| `cup_price` | `numeric(10,2)` | nullable | Comparison unit price |
+| `cup_measure` | `text` | nullable | Comparison measure, such as `100G` |
+| `cup_string` | `text` | nullable | Formatted unit price supplied by the source |
+| `is_available` | `boolean` | nullable | Availability at the time and region observed; null means unknown |
+| `source` | `text` | nullable | Ingestion source/search-term tags |
+| `region` | `text` | nullable | Source region associated with the scrape |
+| `scraped_at` | `timestamptz` | NOT NULL | When the product state was observed |
+| `created_at` | `timestamptz` | NOT NULL, `now()` | When the database row was inserted |
+
+The unique `(run_id, product_id)` constraint allows at most one snapshot for a product in a given run. Deleting a referenced product or run cascades to its history rows according to the migration.
+
+### `scrape_runs`
+
+Ingestion metadata for actor runs. The app does not query this table.
+
+| Column | PostgreSQL type | Null / default | Meaning |
+| --- | --- | --- | --- |
+| `id` | `uuid` | NOT NULL, `gen_random_uuid()` | Primary key |
+| `apify_run_id` | `text` | NOT NULL, UNIQUE | Apify run identifier, or an ingestion fallback identifier |
+| `actor_id` | `text` | nullable | Apify actor identifier |
+| `dataset_id` | `text` | nullable | Apify dataset identifier |
+| `chain` | `text` | NOT NULL, `'woolworths'` | Retail chain |
+| `status` | `text` | NOT NULL, `'SUCCEEDED'` | Run status |
+| `search_terms` | `text[]` | nullable | Search terms associated with ingestion |
+| `items_received` | `integer` | NOT NULL, `0` | Dataset item count |
+| `products_upserted` | `integer` | NOT NULL, `0` | Number of products processed |
+| `price_records_inserted` | `integer` | NOT NULL, `0` | Count of changed snapshot rows processed |
+| `started_at` | `timestamptz` | nullable | Run start |
+| `finished_at` | `timestamptz` | nullable | Run finish |
+| `ingested_at` | `timestamptz` | NOT NULL, `now()` | Last ingestion timestamp written for the run |
+
+### Views
+
+- **`v_latest_prices`** joins each product with its most recent `price_history` row using `DISTINCT ON (p.id)` ordered by product ID and descending `scraped_at`. Products without a history row are excluded by the inner join. It exposes catalogue fields and the latest snapshot, including `last_seen_at` from `products`. The app reads this view for product search and browsing. The migration does not define a secondary tie-breaker for identical `scraped_at` values.
+- **`v_current_specials`** filters `v_latest_prices` to rows with a special flag, a half-price flag, a non-null promotion, or a was price above the current price. The view definition orders by discount percentage and savings descending, nulls last. The app does not currently query this view.
+
+### Indexes in the migration
+
+- `products_chain_stockcode_key`: unique constraint on `(chain, stockcode)`; the migration also creates `idx_products_chain_stockcode` on the same columns.
+- `idx_products_name`: GIN index on `to_tsvector('english', name)`. The app currently uses case-insensitive substring matching rather than a full-text search query, so this index should not be assumed to accelerate the app's search.
+- `idx_price_history_product_scraped`: `(product_id, scraped_at DESC)`.
+- `idx_price_history_specials`: partial index on `is_on_special` for rows where it is true.
+- The primary keys and unique `(run_id, product_id)` constraint also create supporting indexes.
+
+## Build and verification
+
+On a Mac with Xcode 27.2 and its iOS SDK installed, open `Papa PriceChecker.xcodeproj` and run the `Papa PriceChecker` scheme. An unsigned command-line build is:
+
+```sh
+xcodebuild -project 'Papa PriceChecker.xcodeproj' -scheme 'Papa PriceChecker' \
+  -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
+```
+
+Run the local decoding and history-logic checks:
+
+```sh
+xcrun swiftc -module-cache-path /tmp/papa-pricechecker-swift-modules \
+  'Papa PriceChecker/GroceryService.swift' 'Papa PriceChecker/PriceHistoryInsights.swift' \
+  Tests/PriceHistoryChecks.swift -o /tmp/papa-pricechecker-history-checks
+/tmp/papa-pricechecker-history-checks
+```
+
+The checks cover populated promotion fields, null prices, min/max/count calculations, and not comparing across a missing-price snapshot. The app's search and history requests have also been checked against live read-only Supabase data. Those checks do not substitute for an audit of deployed security policies, simulator UI validation, or physical-device testing. Xcode and Apple's SDK require macOS; a normal Linux container cannot provide the iOS build environment.
+
+Before release, validate search and history against expected products, large histories and network failures; test Dynamic Type, VoiceOver, dark/tinted appearance, compact and expanded layouts, and iPhone Duo fold transitions on suitable simulators and devices. The app currently has no automated UI test target, no offline data store, no push notifications and no user-specific saved lists.
