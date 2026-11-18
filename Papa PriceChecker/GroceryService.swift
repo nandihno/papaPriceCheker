@@ -102,22 +102,25 @@ struct GroceryService {
     "product_id,name,brand,package_size,price,was_price,is_on_special,promotion,cup_string,is_available,scraped_at,last_seen_at,image_url,url,region"
 
   func products(search: String, offset: Int) async throws -> [GroceryProduct] {
-    var query = [
-      URLQueryItem(name: "select", value: Self.productSelectColumns),
-      URLQueryItem(name: "order", value: "name.asc,product_id.asc"),
-      URLQueryItem(name: "limit", value: "\(Self.pageSize)"),
-      URLQueryItem(name: "offset", value: "\(offset)"),
-    ]
     let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
     if !term.isEmpty {
-      // PostgREST treats * as an ilike wildcard. Escape user wildcards.
-      let escaped = term.replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "%", with: "\\%")
-        .replacingOccurrences(of: "_", with: "\\_")
-        .replacingOccurrences(of: "*", with: "\\*")
-      query.append(URLQueryItem(name: "name", value: "ilike.%\(escaped)%"))
+      return try await get(
+        "rpc/search_products",
+        query: [
+          URLQueryItem(name: "select", value: Self.productSelectColumns),
+          URLQueryItem(name: "search_text", value: term),
+          URLQueryItem(name: "page_size", value: "\(Self.pageSize)"),
+          URLQueryItem(name: "page_offset", value: "\(offset)"),
+        ])
     }
-    return try await get("v_latest_prices", query: query)
+    return try await get(
+      "v_latest_prices",
+      query: [
+        URLQueryItem(name: "select", value: Self.productSelectColumns),
+        URLQueryItem(name: "order", value: "name.asc,product_id.asc"),
+        URLQueryItem(name: "limit", value: "\(Self.pageSize)"),
+        URLQueryItem(name: "offset", value: "\(offset)"),
+      ])
   }
 
   func products(ids: [UUID]) async throws -> [GroceryProduct] {
@@ -140,7 +143,9 @@ struct GroceryService {
       collected.append(contentsOf: page)
     }
     return collected.sorted {
-      if $0.name != $1.name { return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+      if $0.name != $1.name {
+        return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+      }
       return $0.id.uuidString < $1.id.uuidString
     }
   }
@@ -194,9 +199,13 @@ struct GroceryService {
     var components = URLComponents(
       url: endpoint.appendingPathComponent(table), resolvingAgainstBaseURL: false)!
     components.queryItems = query
+    // PostgREST decodes an unescaped plus in the query string as a space.
+    components.percentEncodedQuery = components.percentEncodedQuery?
+      .replacingOccurrences(of: "+", with: "%2B")
     var request = URLRequest(url: components.url!)
     request.setValue(GroceryConfiguration.publishableKey, forHTTPHeaderField: "apikey")
-    request.setValue("Bearer \(GroceryConfiguration.publishableKey)", forHTTPHeaderField: "Authorization")
+    request.setValue(
+      "Bearer \(GroceryConfiguration.publishableKey)", forHTTPHeaderField: "Authorization")
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let response = response as? HTTPURLResponse else { throw GroceryError.badResponse }
     guard (200..<300).contains(response.statusCode) else {
