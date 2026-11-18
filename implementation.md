@@ -4,7 +4,7 @@ This document describes the iOS app and the grocery database it consumes. It ref
 
 ## Purpose and scope
 
-Papa PriceChecker is a read-only iOS and iPadOS app for finding products tracked by the existing Woolworths ingestion pipeline and viewing their recorded price history. It does not search the retailer's entire catalogue: only products collected by the configured actor appear. The app does not schedule or perform scraping, modify product data, manage accounts, or deploy backend changes.
+Papa PriceChecker is an iOS and iPadOS app for finding products tracked by the existing Woolworths ingestion pipeline and viewing their recorded price history. Public browsing is read-only; the phase-one client also supports optional Sign in with Apple and private favourites once end-to-end validation is complete. It does not search the retailer's entire catalogue: only products collected by the configured actor appear. The app does not schedule or perform scraping, modify public product data, or deploy backend changes.
 
 The user can:
 
@@ -20,11 +20,11 @@ The user can:
 | App | Native Swift and SwiftUI; balanced `NavigationSplitView` master-detail layout, searchable sidebar column, adaptive vertical/horizontal toolbars with `visibilityPriority`, `reservedRegions(kind: .division)` adaptation, and Light/Dark/High Contrast `Theme` tokens |
 | Chart | Apple's Swift Charts, with linear trend lines, gradient area fill, lowest-price rule mark, points, and interactive `.chartXSelection` scrubbing |
 | Icons and images | SF Symbols, a universal 1024 × 1024 app icon asset, adaptive Light/Dark `AccentColor`, and `AsyncImage` for product images (white card for loaded photos, tinted card for placeholders) |
-| Networking | Foundation `URLSession` and `URLComponents`, using HTTPS and Supabase's PostgREST API directly |
+| Networking | Foundation `URLSession` and `URLComponents` for public data; Supabase Swift for authenticated data and functions |
 | Data decoding | `Decodable` and `JSONDecoder`, with ISO 8601 timestamp parsing, including fractional seconds |
 | Concurrency | Swift `async`/`await` and SwiftUI `.task` |
 | Persistence | No app-owned database or persistent offline cache is implemented |
-| Dependencies | No third-party Swift packages; in particular, this app does not currently use the Supabase Swift SDK |
+| Dependencies | Supabase Swift 2.55.6, pinned through Swift Package Manager; AuthenticationServices and CryptoKit for Apple sign-in |
 | Xcode target | `Papa PriceChecker`, bundle identifier `org.nando.Papa-PriceChecker`, iPhone and iPad, minimum iOS/iPadOS 27.2 |
 | Swift settings | Project specifies Swift language mode `5.0`, approachable concurrency and `MainActor` default isolation |
 
@@ -35,6 +35,9 @@ The project was built with Xcode 27.2. The target's deployment version is inheri
 | `Papa PriceChecker/Papa_PriceCheckerApp.swift` | App entry point and root window |
 | `Papa PriceChecker/ContentView.swift` | Adaptive `NavigationSplitView` browse/detail shell, price movement alert, filter modes, gentle red/green price columns, product detail, interactive chart, snapshot list, loading and error states |
 | `Papa PriceChecker/GroceryService.swift` | Supabase REST requests (`products(search:offset:)`, `products(ids:)`, `priceChangeSummaries()`, `history(productID:)`) and `GroceryProduct` / `PriceRecord` response models |
+| `Papa PriceChecker/AccountStore.swift` | Apple sign-in, Supabase session lifecycle, and authenticated favourites operations |
+| `Papa PriceChecker/FavouritesView.swift` | Favourite button, sign-in, list and account-deletion UI |
+| `backend/phase1/README.md` | Phase-one setup, deployment gates and test results; the canonical migration and function are in the grocery backend repo |
 | `Papa PriceChecker/PriceHistoryInsights.swift` | `PriceChangeSummary`, `PriceDirection`, previous-snapshot price comparison, recorded minimum/maximum and priced-snapshot count |
 | `Papa PriceChecker/Assets.xcassets/` | App icon and adaptive Light/Dark `AccentColor` assets |
 | `Tests/PriceHistoryChecks.swift` | Standalone checks for history decoding and calculations; not an Xcode test target |
@@ -100,15 +103,21 @@ Prices are formatted as Australian dollars in the app. Availability and price ca
 
 - The client targets project `grocery-prices`, project reference `wntllezsoavodlrpqcue`, at `https://wntllezsoavodlrpqcue.supabase.co/rest/v1`.
 - The project URL and a **publishable** key are currently embedded in `GroceryService.swift`, and the client sends the key in the `apikey` and bearer authorization headers. The publishable key is a public client identifier, not a secret; never put a secret or service-role key in the iOS bundle.
-- The app has no sign-in flow. Anonymous reads of its product and price-history queries were tested successfully. User accounts are not necessary for the current public read-only experience.
+- Anonymous reads of product and price-history queries work without an account. The phase-one client implements optional native Apple sign-in and authenticated favourites via Supabase Auth; the favourites table and its policies were applied through the SQL editor on 2026-11-18, and the deletion function was deployed on 2026-11-18 with JWT verification; the Apple provider was enabled on 2026-11-18; the migration history still needs reconciliation. See `backend/phase1/README.md`.
 - The backend migration enables row-level security on all three tables and defines `SELECT` policies for the `anon` and `authenticated` roles. It does not define public write policies. Both views use `security_invoker = true` in the local migrations, so callers are subject to the underlying table permissions and policies.
 - The migration also grants anonymous read policy access to `scrape_runs`, although this app does not query that table. Decide whether all run metadata should remain public when auditing the backend.
 - Read-only requests cannot establish the absence of write access or prove deployed RLS configuration. Review live grants, policies, view settings and exposed columns independently before release; do not rely on hiding the publishable key for security.
 - Administrative ingestion credentials belong only in the backend environment. The iOS app makes no calls to the ingestion function.
 
+## Phase-one account architecture
+
+The app uses a cryptographically random nonce and SHA-256 for native Sign in with Apple, then exchanges the Apple identity token through Supabase Auth. The SDK manages the session using platform-secure storage. `AccountStore` reads and modifies only the signed-in user’s `user_favourites` rows; rows are loaded in pages and cleared when the user signs out or changes accounts. The product list remains public. Users can initiate account deletion after a fresh authorization with the same Apple account. The proposed Edge Function verifies both the Supabase user and fresh Apple identity, attempts to revoke the Apple authorization, and deletes that user through the server-side admin API. Its server-only secrets are configured and the function is deployed, but authenticated deletion and revocation still need end-to-end validation.
+
+The migration adds `user_favourites(user_id, product_id, created_at)` with a composite primary key, foreign keys cascading from Auth users and products, and select/insert/delete RLS policies restricted to `auth.uid()`. It grants no access to `anon` and no update privilege. The migration, deletion function and their tests are uncommitted local changes in the grocery backend repository, which remains their deployment owner. The table was applied through the dashboard, so migration version `20261118000001` is not recorded in the hosted migration history; reconcile the existing version mismatch and this missing record before any CLI push. The client does not implement notification delivery.
+
 ## Database schema
 
-The following definitions come from backend migrations `20261117000001_create_grocery_schema.sql` and `20261117000002_add_last_seen_to_views.sql`. All tables and views are in `public`. A nullable column can contain SQL `NULL`; `NOT NULL` and defaults are as specified by the migrations. Monetary and comparison-price values are in Australian dollars unless otherwise stated.
+The current grocery schema definitions below come from backend migrations `20261117000001_create_grocery_schema.sql` and `20261117000002_add_last_seen_to_views.sql`. All tables and views are in `public`. A nullable column can contain SQL `NULL`; `NOT NULL` and defaults are as specified by the migrations. Monetary and comparison-price values are in Australian dollars unless otherwise stated.
 
 ```mermaid
 erDiagram
@@ -240,6 +249,6 @@ xcrun swiftc -module-cache-path /tmp/papa-pricechecker-swift-modules \
 /tmp/papa-pricechecker-history-checks
 ```
 
-The checks cover populated promotion fields, null prices, min/max/count calculations, and not comparing across a missing-price snapshot. The app's search and history requests have also been checked against live read-only Supabase data. Those checks do not substitute for an audit of deployed security policies, simulator UI validation, or physical-device testing. Xcode and Apple's SDK require macOS; a normal Linux container cannot provide the iOS build environment.
+The checks cover populated promotion fields, null prices, min/max/count calculations, and not comparing across a missing-price snapshot. Phase-one RLS and mocked account-deletion checks are described in `backend/phase1/README.md`. The app's search and history requests have also been checked against live read-only Supabase data. Those checks do not substitute for an audit of deployed security policies, simulator UI validation, or physical-device testing. Xcode and Apple's SDK require macOS; a normal Linux container cannot provide the iOS build environment.
 
-Before release, validate search and history against expected products, large histories and network failures; test Dynamic Type, VoiceOver, dark/tinted appearance, compact and expanded layouts, and iPhone Duo fold transitions on suitable simulators and devices. The app currently has no automated UI test target, no offline data store, no push notifications and no user-specific saved lists.
+Before release, validate search and history against expected products, large histories and network failures; test Dynamic Type, VoiceOver, dark/tinted appearance, compact and expanded layouts, and iPhone Duo fold transitions on suitable simulators and devices. The app currently has no automated UI test target, no offline data store, no notification delivery; favourites require the phase-one backend deployment and real-device validation.

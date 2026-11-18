@@ -6,7 +6,7 @@ For the app architecture, data flow, Supabase access and database schema, see [i
 
 ## Open and run
 
-Open `Papa PriceChecker.xcodeproj` in Xcode 27.2 or later and run the `Papa PriceChecker` scheme on an iOS 27.2 simulator or device. The deployment target was inherited from the new Xcode project. Xcode and the Apple SDK are required; they cannot be supplied by a normal Linux container. No dependency installation is necessary. For a command-line unsigned build:
+Open `Papa PriceChecker.xcodeproj` in Xcode 27.2 or later and run the `Papa PriceChecker` scheme on an iOS 27.2 simulator or device. The deployment target was inherited from the new Xcode project. Xcode and the Apple SDK are required; they cannot be supplied by a normal Linux container. Xcode resolves the pinned Supabase Swift package automatically. For a command-line unsigned build:
 
 ```sh
 xcodebuild -project 'Papa PriceChecker.xcodeproj' -scheme 'Papa PriceChecker' \
@@ -19,7 +19,11 @@ The app icon is supplied as a 1024 × 1024 universal iOS asset in `Assets.xcasse
 
 `GroceryService.swift` uses read-only HTTPS requests to the existing Supabase PostgREST API. It reads `v_latest_prices` for browsing and `price_history` for the selected product. The URL and **publishable** key come from the grocery actor's `architecture.md`; the publishable key is intended for public clients and is not a secret. Never add a Supabase secret or service-role key to the app. The grocery backend owns its schema, database grants and row-level security. Its migrations define anonymous SELECT access and security-invoker views; keep write access restricted and review the deployed policies independently before release. No backend changes are made by this app.
 
-No login is required for the public product and price data. An account would only be needed for features such as private, cross-device saved lists. Search covers products collected by the pipeline, not the retailer's entire catalogue. Product availability, promotions and prices may depend on region and may change after a scrape.
+Browsing public product and price data does not require login. The phase-one client adds optional Sign in with Apple and private, synced favourites. The favourites table has been applied to the live project, and the deletion function has been deployed; the Apple provider is enabled, and the user has confirmed sign-in on an iPhone. The user also confirmed that a favourite persists after reopening the app; cross-device syncing and account-deletion validation remain pending; see [phase-one setup](backend/phase1/README.md) before attempting sign-in or releasing the feature. Search covers products collected by the pipeline, not the retailer's entire catalogue. Product availability, promotions and prices may depend on region and may change after a scrape.
+
+## Accounts and favourites
+
+Tap the heart on a product to sign in with Apple and save it. The Favourites toolbar button opens the saved list and account actions. A signed-in user can remove favourites, sign out on the current device, or request account deletion after reauthorizing with Apple. Account deletion requires the separate backend function, Apple signing credentials and server configuration described in the phase-one setup. No notification or alert delivery is implemented in this phase.
 
 ## Understanding history
 

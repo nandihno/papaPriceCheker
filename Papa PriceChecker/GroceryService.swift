@@ -88,10 +88,15 @@ private struct CompactHistoryRow: Decodable {
   }
 }
 
+/// Public configuration. The publishable key is not an access-control secret.
+enum GroceryConfiguration {
+  static let url = URL(string: "https://wntllezsoavodlrpqcue.supabase.co")!
+  static let publishableKey = "sb_publishable_GOqwNwuuM-X77UWa7MdXTg_4pIiU_7l"
+}
+
 /// Public, read-only PostgREST access. Database grants and RLS enforce access.
 struct GroceryService {
-  private let endpoint = URL(string: "https://wntllezsoavodlrpqcue.supabase.co/rest/v1")!
-  private let publicKey = "sb_publishable_GOqwNwuuM-X77UWa7MdXTg_4pIiU_7l"
+  private let endpoint = GroceryConfiguration.url.appendingPathComponent("rest/v1")
   static let pageSize = 50
   private static let productSelectColumns =
     "product_id,name,brand,package_size,price,was_price,is_on_special,promotion,cup_string,is_available,scraped_at,last_seen_at,image_url,url,region"
@@ -190,8 +195,8 @@ struct GroceryService {
       url: endpoint.appendingPathComponent(table), resolvingAgainstBaseURL: false)!
     components.queryItems = query
     var request = URLRequest(url: components.url!)
-    request.setValue(publicKey, forHTTPHeaderField: "apikey")
-    request.setValue("Bearer \(publicKey)", forHTTPHeaderField: "Authorization")
+    request.setValue(GroceryConfiguration.publishableKey, forHTTPHeaderField: "apikey")
+    request.setValue("Bearer \(GroceryConfiguration.publishableKey)", forHTTPHeaderField: "Authorization")
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let response = response as? HTTPURLResponse else { throw GroceryError.badResponse }
     guard (200..<300).contains(response.statusCode) else {

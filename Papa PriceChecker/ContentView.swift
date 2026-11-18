@@ -123,6 +123,7 @@ private enum ProductFilter: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
+  @State private var showingFavourites = false
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -233,6 +234,12 @@ struct ContentView: View {
       detailPane
     }
     .navigationSplitViewStyle(.balanced)
+    .sheet(isPresented: $showingFavourites) {
+      FavouritesView { product in
+        selectedProduct = product
+        preferredColumn = .detail
+      }
+    }
     .tint(Theme.brand)
     .task(id: search) {
       do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
@@ -346,6 +353,9 @@ struct ContentView: View {
     .searchable(text: $search, prompt: "Search products")
     .refreshable { await load() }
     .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Button { showingFavourites = true } label: { Label("Favourites", systemImage: "heart") }
+      }
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
           ForEach(ProductFilter.allCases) { option in
@@ -1179,6 +1189,7 @@ private struct ProductDetail: View {
     }
     .scrollEdgeEffectStyle(.soft, for: .top)
     .background(Color(uiColor: .systemGroupedBackground))
+    .toolbar { ToolbarItem(placement: .topBarTrailing) { FavouriteButton(productID: product.id) } }
     .navigationTitle("Product details")
     .navigationBarTitleDisplayMode(.inline)
     .onGeometryChange(for: DivisionLayout.self) { proxy in
