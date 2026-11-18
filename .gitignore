@@ -11,6 +11,7 @@ build/
 .env.*
 *.local.xcconfig
 Local.xcconfig
+supabase/.temp/
 *.p8
 *.p12
 *.pem
