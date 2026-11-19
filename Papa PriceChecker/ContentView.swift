@@ -123,6 +123,17 @@ private enum ProductFilter: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
+  private enum CatalogSnapshot: Equatable {
+    case pending
+    case dated(Date)
+    case unavailable
+  }
+
+  private struct BrowseQuery: Equatable {
+    let chain: String
+    let search: String
+  }
+
   @State private var showingFavourites = false
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -130,6 +141,11 @@ struct ContentView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   @State private var search = ""
+  @State private var retailers: [GroceryRetailer] = [.woolworths]
+  @State private var retailer = GroceryRetailer.woolworths
+  @State private var loadID = UUID()
+  @State private var loadedQuery: BrowseQuery?
+  @State private var catalogSnapshot: CatalogSnapshot = .pending
   @State private var baseProducts: [GroceryProduct] = []
   @State private var changedProducts: [GroceryProduct] = []
   @State private var summaries: [UUID: PriceChangeSummary] = [:]
@@ -145,6 +161,8 @@ struct ContentView: View {
 
   private let service = GroceryService()
 
+  private var browseQuery: BrowseQuery { BrowseQuery(chain: retailer.chain, search: search) }
+
   private var allKnownProducts: [GroceryProduct] {
     guard search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       return baseProducts
@@ -158,17 +176,11 @@ struct ContentView: View {
   }
 
   private var decreasedCount: Int {
-    if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !summaries.isEmpty {
-      return summaries.values.filter { $0.direction == .decreased }.count
-    }
-    return allKnownProducts.filter { summary(for: $0)?.direction == .decreased }.count
+    allKnownProducts.filter { summary(for: $0)?.direction == .decreased }.count
   }
 
   private var increasedCount: Int {
-    if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !summaries.isEmpty {
-      return summaries.values.filter { $0.direction == .increased }.count
-    }
-    return allKnownProducts.filter { summary(for: $0)?.direction == .increased }.count
+    allKnownProducts.filter { summary(for: $0)?.direction == .increased }.count
   }
 
   private var specialsCount: Int {
@@ -223,7 +235,7 @@ struct ContentView: View {
   }
 
   private func summary(for product: GroceryProduct) -> PriceChangeSummary? {
-    summaries[product.id]
+    product.latestPriceComparison(recorded: summaries[product.id])
   }
 
   var body: some View {
@@ -235,22 +247,37 @@ struct ContentView: View {
     }
     .navigationSplitViewStyle(.balanced)
     .sheet(isPresented: $showingFavourites) {
-      FavouritesView { product in
+      FavouritesView(retailers: retailers) { product in
+        if let destination = retailers.first(where: { $0.chain == product.chain }) {
+          selectRetailer(destination)
+        }
         selectedProduct = product
         preferredColumn = .detail
       }
     }
     .tint(Theme.brand)
-    .task(id: search) {
+    .task { await loadRetailers() }
+    .task(id: browseQuery) {
       do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-      await load()
+      await load(refreshCatalogSnapshot: false)
     }
   }
 
   private var sidebar: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        intro
+        VStack(alignment: .leading, spacing: 8) {
+          intro
+          if retailers.count > 1 {
+            Picker("Retailer", selection: retailerSelection) {
+              ForEach(retailers) { retailer in
+                Text(retailer.displayName).tag(retailer.chain)
+              }
+            }
+            .pickerStyle(.menu)
+          }
+          catalogSnapshotStatus
+        }
         if !loading, error == nil, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           decreasedCount > 0 || increasedCount > 0
         {
@@ -273,8 +300,13 @@ struct ContentView: View {
             }
             .padding(.top, 12)
           } else if allKnownProducts.isEmpty {
-            ContentUnavailableView.search(text: search)
-              .padding(.top, 12)
+            if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              ContentUnavailableView("No products available", systemImage: "basket")
+                .padding(.top, 12)
+            } else {
+              ContentUnavailableView.search(text: search)
+                .padding(.top, 12)
+            }
           } else if displayedProducts.isEmpty {
             ContentUnavailableView {
               Label(emptyFilterTitle, systemImage: filter.systemImage)
@@ -351,7 +383,7 @@ struct ContentView: View {
     .navigationTitle("Price Checker")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $search, prompt: "Search products")
-    .refreshable { await load() }
+    .refreshable { await refreshCatalog() }
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
         Button { showingFavourites = true } label: { Label("Favourites", systemImage: "heart") }
@@ -384,7 +416,7 @@ struct ContentView: View {
 
       ToolbarItem(placement: .topBarTrailing) {
         Button {
-          Task { await load() }
+          Task { await refreshCatalog() }
         } label: {
           Label("Refresh", systemImage: "arrow.clockwise")
         }
@@ -516,7 +548,18 @@ struct ContentView: View {
   @ViewBuilder
   private var detailPane: some View {
     if let product = selectedProduct {
-      ProductDetail(product: product, summary: summary(for: product))
+      let snapshotDate: Date? =
+        if product.chain == retailer.chain, case .dated(let date) = catalogSnapshot {
+          date
+        } else {
+          nil
+        }
+      ProductDetail(
+        product: product,
+        retailerName: GroceryRetailer.displayName(for: product.chain, in: retailers),
+        summary: summaries[product.id],
+        catalogSnapshotDate: snapshotDate
+      )
     } else {
       ContentUnavailableView(
         "Select a product",
@@ -536,8 +579,8 @@ struct ContentView: View {
         Text(search.isEmpty ? "Explore products" : "Search results")
           .font(.title3.bold())
         Spacer()
-        if !allKnownProducts.isEmpty {
-          Text("Woolworths")
+        if retailers.count == 1, !allKnownProducts.isEmpty {
+          Text(retailer.displayName)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
         }
@@ -637,7 +680,7 @@ struct ContentView: View {
     Group {
       if isCompactBand {
         HStack(spacing: 12) {
-          Label("Woolworths Price Tracker", systemImage: "basket.fill")
+          Label("\(retailer.displayName) Price Tracker", systemImage: "basket.fill")
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
           Spacer(minLength: 8)
@@ -666,7 +709,7 @@ struct ContentView: View {
           Text("Know your prices.")
             .font(horizontalSizeClass == .regular ? .title.bold() : .title2.bold())
 
-          Text("Track Woolworths price drops, increases, and full history.")
+          Text("Track \(retailer.displayName) price drops, increases, and full history.")
             .font(.subheadline)
             .foregroundStyle(.white.opacity(0.88))
 
@@ -695,6 +738,23 @@ struct ContentView: View {
     .padding(.top, 6)
   }
 
+  @ViewBuilder
+  private var catalogSnapshotStatus: some View {
+    let title: LocalizedStringKey? =
+      switch catalogSnapshot {
+      case .pending: nil
+      case .dated(let date):
+        "Catalog snapshot as of \(date.formatted(date: .abbreviated, time: .shortened))"
+      case .unavailable: "Catalog update time unavailable"
+      }
+    if let title {
+      Label(title, systemImage: "clock")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
   private func heroMetricPill(_ title: String, systemImage: String) -> some View {
     Label(title, systemImage: systemImage)
       .font(.caption.weight(.semibold))
@@ -705,17 +765,73 @@ struct ContentView: View {
   }
 
   @MainActor
-  private func load() async {
+  private func refreshCatalog() async {
+    let currentChain = retailer.chain
+    await loadRetailers()
+    if !Task.isCancelled, currentChain == retailer.chain { await load() }
+  }
+
+  @MainActor
+  private func loadRetailers() async {
+    guard let available = try? await service.retailers(), !available.isEmpty,
+      !Task.isCancelled
+    else { return }
+    retailers = available
+    let selection =
+      available.first { $0.chain == retailer.chain }
+      ?? available.first { $0.chain == GroceryRetailer.woolworths.chain }
+      ?? available[0]
+    selectRetailer(selection)
+  }
+
+  private var retailerSelection: Binding<String> {
+    Binding(
+      get: { retailer.chain },
+      set: { chain in
+        if let selection = retailers.first(where: { $0.chain == chain }) {
+          selectRetailer(selection)
+        }
+      })
+  }
+
+  @MainActor
+  private func selectRetailer(_ selection: GroceryRetailer) {
+    let changed = selection.chain != retailer.chain
+    retailer = selection
+    guard changed else { return }
+    loadID = UUID()
+    loadedQuery = nil
+    selectedProduct = nil
+    preferredColumn = .sidebar
+    catalogSnapshot = .pending
+    baseProducts = []
+    changedProducts = []
+    summaries = [:]
+    hasMore = false
     loading = true
+    loadingMore = false
     error = nil
     pageError = nil
-    let requestedSearch = search
-    let isBrowsing = requestedSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    let shouldFetchSummaries = isBrowsing || summaries.isEmpty
+  }
+
+  @MainActor
+  private func load(refreshCatalogSnapshot: Bool = true) async {
+    let requestID = UUID()
+    loadID = requestID
+    loading = true
+    loadingMore = false
+    error = nil
+    pageError = nil
+    let request = browseQuery
+    let isBrowsing = request.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let shouldFetchSummaries = refreshCatalogSnapshot || isBrowsing || summaries.isEmpty
+    let shouldFetchSnapshot = refreshCatalogSnapshot || isBrowsing || catalogSnapshot == .pending
     do {
-      async let pageTask = service.products(search: requestedSearch, offset: 0)
+      async let pageTask = service.products(chain: request.chain, search: request.search, offset: 0)
       async let summariesTask: [UUID: PriceChangeSummary]? =
-        shouldFetchSummaries ? (try? service.priceChangeSummaries()) : nil
+        shouldFetchSummaries ? (try? service.priceChangeSummaries(chain: request.chain)) : nil
+      async let snapshotTask: Date? =
+        shouldFetchSnapshot ? (try? service.latestCatalogSnapshot(chain: request.chain)) : nil
       let result = try await pageTask
       let fetchedSummaries = await summariesTask
       var fetchedChanged: [GroceryProduct] = []
@@ -723,10 +839,12 @@ struct ContentView: View {
         let changedIDs = fetchedSummaries.compactMap { id, summary -> UUID? in
           (summary.direction == .decreased || summary.direction == .increased) ? id : nil
         }
-        fetchedChanged = (try? await service.products(ids: changedIDs)) ?? []
+        let products = (try? await service.products(ids: changedIDs, chain: request.chain)) ?? []
+        fetchedChanged = products.filter { $0.unchangedPriceCheck == nil }
       }
-      guard !Task.isCancelled, requestedSearch == search else { return }
+      guard !Task.isCancelled, request == browseQuery, requestID == loadID else { return }
       baseProducts = result
+      loadedQuery = request
       if let fetchedSummaries {
         summaries = fetchedSummaries
       }
@@ -738,10 +856,19 @@ struct ContentView: View {
         let updated = allKnownProducts.first(where: { $0.id == current.id })
       {
         selectedProduct = updated
+      } else if refreshCatalogSnapshot, let id = selectedProduct?.id {
+        let updated = try? await service.products(ids: [id]).first
+        guard !Task.isCancelled, request == browseQuery, requestID == loadID else { return }
+        if let updated, selectedProduct?.id == id { selectedProduct = updated }
       }
       loading = false
+      if shouldFetchSnapshot {
+        let date = await snapshotTask
+        guard !Task.isCancelled, request == browseQuery, requestID == loadID else { return }
+        catalogSnapshot = date.map(CatalogSnapshot.dated) ?? .unavailable
+      }
     } catch {
-      guard !Task.isCancelled, requestedSearch == search else { return }
+      guard !Task.isCancelled, request == browseQuery, requestID == loadID else { return }
       self.error = error.localizedDescription
       baseProducts = []
       if isBrowsing {
@@ -754,24 +881,25 @@ struct ContentView: View {
 
   @MainActor
   private func loadMore() async {
-    guard !loadingMore else { return }
+    guard !loading, !loadingMore, loadedQuery == browseQuery else { return }
     loadingMore = true
     pageError = nil
-    let requestedSearch = search
+    let request = browseQuery
+    let requestID = loadID
+    defer {
+      if requestID == loadID { loadingMore = false }
+    }
     do {
-      let next = try await service.products(search: requestedSearch, offset: baseProducts.count)
-      guard requestedSearch == search else {
-        loadingMore = false
-        return
-      }
+      let next = try await service.products(
+        chain: request.chain, search: request.search, offset: baseProducts.count)
+      guard !Task.isCancelled, request == browseQuery, requestID == loadID else { return }
       baseProducts.append(contentsOf: next)
       hasMore = next.count == GroceryService.pageSize
     } catch {
-      if requestedSearch == search {
+      if !Task.isCancelled, request == browseQuery, requestID == loadID {
         pageError = error.localizedDescription
       }
     }
-    loadingMore = false
   }
 }
 
@@ -1028,7 +1156,9 @@ private struct ProductDetail: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   let product: GroceryProduct
+  let retailerName: String
   let summary: PriceChangeSummary?
+  let catalogSnapshotDate: Date?
 
   @State private var records: [PriceRecord] = []
   @State private var loading = true
@@ -1042,22 +1172,15 @@ private struct ProductDetail: View {
 
   private let service = GroceryService()
 
-  private var effectivePriceChange: Double? {
-    if !loading, let loadedDelta = insights.entries.last?.priceChange {
-      return loadedDelta
+  private var priceComparison: PriceChangeSummary? {
+    let recorded = records.last.map { last in
+      PriceChangeSummary(previousPrice: records.dropLast().last?.price, latestPrice: last.price)
     }
-    return summary?.delta
-  }
-
-  private var effectivePreviousPrice: Double? {
-    if !loading, records.count >= 2, effectivePriceChange != nil {
-      return records[records.count - 2].price
-    }
-    return summary?.previousPrice
+    return product.latestPriceComparison(recorded: recorded ?? summary)
   }
 
   private var chartAccent: Color {
-    if let change = effectivePriceChange, change > 0.005 {
+    if priceComparison?.direction == .increased {
       return Theme.priceRise
     }
     return Theme.brand
@@ -1093,12 +1216,33 @@ private struct ProductDetail: View {
     period.months.flatMap { Calendar.current.date(byAdding: .month, value: -$0, to: Date()) }
   }
 
+  private var lastProductCheckDate: Date {
+    max(product.scrapedAt, product.lastSeenAt ?? product.scrapedAt)
+  }
+
+  private var laterCatalogSnapshot: Date? {
+    let calendar = Calendar.current
+    guard let catalogSnapshotDate,
+      calendar.startOfDay(for: catalogSnapshotDate) > calendar.startOfDay(for: lastProductCheckDate)
+    else { return nil }
+    return catalogSnapshotDate
+  }
+
+  private var latestPricedRecord: PriceRecord? {
+    guard let last = records.last, last.scrapedAt == product.scrapedAt,
+      let price = last.price, price == product.price
+    else { return nil }
+    return last
+  }
+
   private var displayed: [PriceRecord] {
     guard let cutoff = periodCutoff else { return priced }
     let newer = priced.filter { $0.scrapedAt >= cutoff }
-    // Include the last observation before the window so the chart begins with the known price.
+    let catalogReachesRange = laterCatalogSnapshot.map { $0 > cutoff } ?? false
+    // Include the preceding observation when its price reaches the window.
     if let previous = records.last(where: { $0.scrapedAt < cutoff }), previous.price != nil,
-      (product.lastSeenAt ?? previous.scrapedAt) >= cutoff
+      lastProductCheckDate >= cutoff
+        || (catalogReachesRange && latestPricedRecord?.id == previous.id)
     {
       return [previous] + newer
     }
@@ -1118,38 +1262,63 @@ private struct ProductDetail: View {
     return lower...upper
   }
 
-  private var chartEndDate: Date? {
-    guard !hasUnknownPrices, let lastDate = displayed.last.map({ plottedDate(for: $0, cutoff: periodCutoff) }),
-      let checked = product.lastSeenAt
+  private var plottedUnchangedCheck: UnchangedPriceCheck? {
+    guard let last = latestPricedRecord, displayed.last?.id == last.id,
+      let checked = product.unchangedPriceCheck,
+      checked.date >= plottedDate(for: last, cutoff: periodCutoff)
     else { return nil }
-    return max(checked, lastDate)
+    return checked
+  }
+
+  private var carriedPrice: (price: Double, from: Date, to: Date)? {
+    guard let end = laterCatalogSnapshot, let last = latestPricedRecord,
+      displayed.last?.id == last.id, let price = last.price
+    else { return nil }
+    let start = max(lastProductCheckDate, plottedDate(for: last, cutoff: periodCutoff))
+    guard start < end else { return nil }
+    return (price, start, end)
+  }
+
+  private var chartDateSpan: ClosedRange<Date>? {
+    let cutoff = periodCutoff
+    guard let first = displayed.first, let last = displayed.last else { return nil }
+    let lastPlotted = plottedDate(for: last, cutoff: cutoff)
+    let end = max(lastPlotted, laterCatalogSnapshot ?? lastProductCheckDate)
+    return plottedDate(for: first, cutoff: cutoff)...end
   }
 
   private var chartXDomain: ClosedRange<Date> {
-    let cutoff = periodCutoff
-    let dates = displayed.map { plottedDate(for: $0, cutoff: cutoff) }
-    guard let first = dates.first, let last = dates.last else {
+    guard let dates = chartDateSpan else {
       let now = Date()
       return now.addingTimeInterval(-86_400)...now
     }
-    let maxDate = max(last, chartEndDate ?? last)
-    let span = maxDate.timeIntervalSince(first)
-    if displayed.count == 1 && span <= 0 {
+    let first = dates.lowerBound
+    let last = dates.upperBound
+    let span = last.timeIntervalSince(first)
+    if span == 0 {
       return first.addingTimeInterval(-43_200)...first.addingTimeInterval(43_200)
     }
     let pad = max(3_600, span * 0.12)
-    return first.addingTimeInterval(-pad)...maxDate.addingTimeInterval(pad)
+    return first.addingTimeInterval(-pad)...last.addingTimeInterval(pad)
   }
 
-  private var scrubbedMatch: (record: PriceRecord, plottedDate: Date)? {
+  private var scrubbedMatch: (price: Double, plottedDate: Date, observedAt: Date, unchanged: Bool)?
+  {
     guard let selectedDate, !displayed.isEmpty else { return nil }
     let cutoff = periodCutoff
-    guard let nearest = displayed.min(by: {
-      let lhs = abs(plottedDate(for: $0, cutoff: cutoff).timeIntervalSince(selectedDate))
-      let rhs = abs(plottedDate(for: $1, cutoff: cutoff).timeIntervalSince(selectedDate))
-      return lhs < rhs
-    }) else { return nil }
-    return (nearest, plottedDate(for: nearest, cutoff: cutoff))
+    let match = displayed.min { lhs, rhs in
+      abs(plottedDate(for: lhs, cutoff: cutoff).timeIntervalSince(selectedDate))
+        < abs(plottedDate(for: rhs, cutoff: cutoff).timeIntervalSince(selectedDate))
+    }
+    guard let nearest = match, let price = nearest.price else { return nil }
+    let position = plottedDate(for: nearest, cutoff: cutoff)
+    if let check = plottedUnchangedCheck,
+      abs(check.date.timeIntervalSince(selectedDate))
+        <= abs(position.timeIntervalSince(selectedDate))
+    {
+      return (check.price, check.date, check.date, true)
+    }
+    return (price, position, nearest.scrapedAt, false)
   }
 
   private var statColumns: [GridItem] {
@@ -1209,8 +1378,8 @@ private struct ProductDetail: View {
     .onAppear {
       ensureLoaded()
     }
-    .onChange(of: product.id) { _, _ in
-      reloadHistory()
+    .onChange(of: product) { old, new in
+      if old.id != new.id || old.scrapedAt != new.scrapedAt { reloadHistory() }
     }
   }
 
@@ -1220,7 +1389,7 @@ private struct ProductDetail: View {
         ProductImage(url: product.imageURL, size: 84)
         VStack(alignment: .leading, spacing: 6) {
           HStack(spacing: 8) {
-            Text("WOOLWORTHS")
+            Text(retailerName.uppercased())
               .font(.caption2.bold())
               .tracking(1)
               .foregroundStyle(Theme.brand)
@@ -1264,7 +1433,11 @@ private struct ProductDetail: View {
         Spacer(minLength: 0)
       }
 
-      if let change = effectivePriceChange, abs(change) > 0.005 {
+      if priceComparison?.direction == .unchanged {
+        Label("Price unchanged", systemImage: "equal.circle.fill")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(.secondary)
+      } else if let change = priceComparison?.delta, abs(change) > 0.005 {
         let isIncrease = change > 0
         HStack(spacing: 12) {
           Image(
@@ -1284,7 +1457,7 @@ private struct ProductDetail: View {
             .font(.subheadline.weight(.semibold).monospacedDigit())
             .foregroundStyle(isIncrease ? Theme.priceRise : Theme.brand)
 
-            if let prev = effectivePreviousPrice {
+            if let prev = priceComparison?.previousPrice {
               Text("From \(money(prev)) at previous recorded check")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -1342,7 +1515,7 @@ private struct ProductDetail: View {
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 10) {
             Link(destination: url) {
-              Label("View at Woolworths", systemImage: "arrow.up.right.square.fill")
+              Label("View at \(retailerName)", systemImage: "arrow.up.right.square.fill")
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
             }
@@ -1359,7 +1532,7 @@ private struct ProductDetail: View {
 
           VStack(spacing: 8) {
             Link(destination: url) {
-              Label("View at Woolworths", systemImage: "arrow.up.right.square.fill")
+              Label("View at \(retailerName)", systemImage: "arrow.up.right.square.fill")
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
             }
@@ -1383,12 +1556,15 @@ private struct ProductDetail: View {
   private var historyCard: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top) {
-        if let matched = scrubbedMatch, let scrubbedPrice = matched.record.price {
+        if let matched = scrubbedMatch {
+          let date = matched.observedAt.formatted(date: .abbreviated, time: .shortened)
+          let title: LocalizedStringKey =
+            matched.unchanged ? "Price unchanged · \(date)" : "Recorded \(date)"
           VStack(alignment: .leading, spacing: 4) {
-            Text(money(scrubbedPrice))
+            Text(money(matched.price))
               .font(.title2.bold().monospacedDigit())
               .foregroundStyle(chartAccent)
-            Text("Recorded \(matched.record.scrapedAt.formatted(date: .abbreviated, time: .shortened))")
+            Text(title)
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -1434,6 +1610,21 @@ private struct ProductDetail: View {
 
         chart
 
+        if let date = product.lastSeenAt {
+          Label(
+            "Last checked \(date.formatted(date: .abbreviated, time: .shortened))",
+            systemImage: "clock"
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+
+        if carriedPrice != nil {
+          Text("The dashed segment carries forward the last known price.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
         if let lowest = insights.lowest, let highest = insights.highest {
           LazyVGrid(columns: statColumns, alignment: .leading, spacing: 12) {
             historyStatistic(
@@ -1476,7 +1667,7 @@ private struct ProductDetail: View {
         }
 
         Text(
-          "Snapshots are recorded when the product is first seen or its price, promotion or availability changes. They do not represent every daily check."
+          "Snapshots record the first observation and later changes. The chart also shows the most recent confirmed check when the price stayed the same."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -1532,27 +1723,34 @@ private struct ProductDetail: View {
     let first = displayed.first
     let last = displayed.last
     let cutoff = periodCutoff
-    let end = chartEndDate
+    let check = plottedUnchangedCheck
     let domain = chartYDomain
     let xDomain = chartXDomain
     let baseline = domain?.lowerBound ?? 0
-    let spansMultipleDays = !Calendar.current.isDate(xDomain.lowerBound, inSameDayAs: xDomain.upperBound)
+    let dates = chartDateSpan ?? xDomain
+    let calendar = Calendar.current
+    let spansMultipleDays = !calendar.isDate(dates.lowerBound, inSameDayAs: dates.upperBound)
+    let granularity: Calendar.Component = spansMultipleDays ? .day : .minute
+    let midpoint = dates.lowerBound.addingTimeInterval(
+      dates.upperBound.timeIntervalSince(dates.lowerBound) / 2)
+    var axisDates = [dates.upperBound]
+    for date in [dates.lowerBound, midpoint] {
+      let overlaps = axisDates.contains {
+        calendar.isDate($0, equalTo: date, toGranularity: granularity)
+      }
+      if !overlaps { axisDates.insert(date, at: axisDates.count - 1) }
+    }
     let showPointAnnotations = displayed.count <= 6 && selectedDate == nil
+    let fill = LinearGradient(
+      colors: [chartAccent.opacity(0.22), chartAccent.opacity(0.02)],
+      startPoint: .top,
+      endPoint: .bottom)
 
     return Chart {
       if let lowest = insights.lowest, let highest = insights.highest, lowest < highest {
         RuleMark(y: .value("Price", lowest))
           .foregroundStyle(Theme.brand.opacity(0.35))
           .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-      }
-
-      if !hasUnknownPrices, displayed.count == 1, let onlyPrice = first?.price,
-        let onlyDate = first.map({ plottedDate(for: $0, cutoff: cutoff) }),
-        (end ?? onlyDate) <= onlyDate
-      {
-        RuleMark(y: .value("Price", onlyPrice))
-          .foregroundStyle(chartAccent.opacity(0.45))
-          .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 4]))
       }
 
       ForEach(displayed) { item in
@@ -1565,13 +1763,7 @@ private struct ProductDetail: View {
               yEnd: .value("Price", price)
             )
             .interpolationMethod(.linear)
-            .foregroundStyle(
-              LinearGradient(
-                colors: [chartAccent.opacity(0.22), chartAccent.opacity(0.02)],
-                startPoint: .top,
-                endPoint: .bottom
-              )
-            )
+            .foregroundStyle(fill)
 
             LineMark(x: .value("Date", date), y: .value("Price", price))
               .interpolationMethod(.linear)
@@ -1579,60 +1771,86 @@ private struct ProductDetail: View {
               .foregroundStyle(chartAccent)
           }
 
-          PointMark(x: .value("Date", date), y: .value("Price", price))
-            .foregroundStyle(chartAccent)
-            .symbolSize(64)
-            .annotation(
-              position: .top,
-              spacing: 6,
-              overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))
-            ) {
-              if showPointAnnotations {
-                Text(money(price))
-                  .font(.caption2.bold().monospacedDigit())
-                  .foregroundStyle(chartAccent)
+          if date == item.scrapedAt || date <= lastProductCheckDate {
+            PointMark(x: .value("Date", date), y: .value("Price", price))
+              .foregroundStyle(chartAccent)
+              .symbolSize(64)
+              .annotation(
+                position: .top,
+                spacing: 6,
+                overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))
+              ) {
+                if showPointAnnotations {
+                  Text(money(price))
+                    .font(.caption2.bold().monospacedDigit())
+                    .foregroundStyle(chartAccent)
+                }
               }
-            }
-            .accessibilityLabel(date.formatted(date: .abbreviated, time: .shortened))
-            .accessibilityValue(money(price))
+              .accessibilityLabel(item.scrapedAt.formatted(date: .abbreviated, time: .shortened))
+              .accessibilityValue(money(price))
+          }
         }
       }
 
-      if !hasUnknownPrices, let last, let price = last.price, let end, end > last.scrapedAt {
-        AreaMark(
-          x: .value("Date", end),
-          yStart: .value("Price", baseline),
-          yEnd: .value("Price", price)
-        )
-        .interpolationMethod(.linear)
-        .foregroundStyle(
-          LinearGradient(
-            colors: [chartAccent.opacity(0.22), chartAccent.opacity(0.02)],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        )
-
-        LineMark(x: .value("Date", end), y: .value("Price", price))
-          .interpolationMethod(.linear)
-          .lineStyle(StrokeStyle(lineWidth: 2.5))
-          .foregroundStyle(chartAccent)
+      if let last, let check {
+        let from = plottedDate(for: last, cutoff: cutoff)
+        if check.date > from {
+          if hasUnknownPrices {
+            LineMark(x: .value("Date", from), y: .value("Price", check.price))
+              .lineStyle(StrokeStyle(lineWidth: 2.5))
+              .foregroundStyle(chartAccent)
+          } else {
+            AreaMark(
+              x: .value("Date", check.date),
+              yStart: .value("Price", baseline),
+              yEnd: .value("Price", check.price)
+            )
+            .interpolationMethod(.linear)
+            .foregroundStyle(fill)
+          }
+          LineMark(x: .value("Date", check.date), y: .value("Price", check.price))
+            .interpolationMethod(.linear)
+            .lineStyle(StrokeStyle(lineWidth: 2.5))
+            .foregroundStyle(chartAccent)
+          PointMark(x: .value("Date", check.date), y: .value("Price", check.price))
+            .foregroundStyle(chartAccent)
+            .symbolSize(64)
+            .accessibilityLabel(
+              "Price unchanged on \(check.date.formatted(date: .abbreviated, time: .shortened))"
+            )
+            .accessibilityValue(money(check.price))
+        }
       }
 
-      if let selectedDate, let matched = scrubbedMatch, let matchedPrice = matched.record.price {
+      if let carry = carriedPrice {
+        RuleMark(
+          xStart: .value("From", carry.from),
+          xEnd: .value("Through catalog snapshot", carry.to),
+          y: .value("Last known price", carry.price)
+        )
+        .foregroundStyle(Color.secondary)
+        .lineStyle(StrokeStyle(lineWidth: 2.5, dash: [5, 4]))
+        .accessibilityLabel("Last known price carried forward")
+        .accessibilityValue(money(carry.price))
+      }
+
+      if let selectedDate, let matched = scrubbedMatch {
         RuleMark(x: .value("Date", selectedDate))
           .foregroundStyle(chartAccent.opacity(0.45))
           .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-        PointMark(x: .value("Date", matched.plottedDate), y: .value("Price", matchedPrice))
-          .foregroundStyle(chartAccent)
-          .symbolSize(100)
+        let isObservedDate = matched.plottedDate == matched.observedAt
+        if isObservedDate || matched.plottedDate <= lastProductCheckDate {
+          PointMark(x: .value("Date", matched.plottedDate), y: .value("Price", matched.price))
+            .foregroundStyle(chartAccent)
+            .symbolSize(100)
+        }
       }
     }
     .chartXSelection(value: $selectedDate)
     .chartXScale(domain: xDomain)
     .chartYScale(domain: domain ?? 0...1)
     .chartXAxis {
-      AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+      AxisMarks(values: axisDates) { _ in
         AxisGridLine()
         AxisTick()
         if spansMultipleDays {
@@ -1650,7 +1868,7 @@ private struct ProductDetail: View {
     }
     .frame(minHeight: 220, maxHeight: 280)
     .accessibilityLabel("Price history chart")
-    .accessibilityHint("Touch and drag across the chart to inspect recorded prices, or read snapshots below.")
+    .accessibilityHint("Touch and drag across the chart to inspect prices and confirmed checks.")
     .overlay {
       if first == nil {
         Text("No prices in this period")

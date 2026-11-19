@@ -1,7 +1,27 @@
 import Foundation
 
+struct GroceryRetailer: Decodable, Identifiable, Equatable {
+  let chain: String
+  let displayName: String
+
+  static let woolworths = GroceryRetailer(chain: "woolworths", displayName: "Woolworths")
+
+  var id: String { chain }
+
+  enum CodingKeys: String, CodingKey {
+    case chain
+    case displayName = "display_name"
+  }
+
+  static func displayName(for chain: String, in retailers: [Self]) -> String {
+    retailers.first { $0.chain == chain }?.displayName
+      ?? (chain == "aldi" ? "ALDI" : chain.replacingOccurrences(of: "-", with: " ").capitalized)
+  }
+}
+
 struct GroceryProduct: Decodable, Identifiable, Hashable {
   let productID: UUID
+  let chain: String
   let name: String
   let brand: String?
   let packageSize: String?
@@ -20,7 +40,7 @@ struct GroceryProduct: Decodable, Identifiable, Hashable {
   var id: UUID { productID }
   enum CodingKeys: String, CodingKey {
     case productID = "product_id"
-    case name, brand, price, promotion, url, region
+    case chain, name, brand, price, promotion, url, region
     case packageSize = "package_size"
     case wasPrice = "was_price"
     case isOnSpecial = "is_on_special"
@@ -88,10 +108,36 @@ private struct CompactHistoryRow: Decodable {
   }
 }
 
+private struct CompletedScrapeRun: Decodable {
+  let finishedAt: Date
+
+  enum CodingKeys: String, CodingKey {
+    case finishedAt = "finished_at"
+  }
+}
+
 /// Public configuration. The publishable key is not an access-control secret.
 enum GroceryConfiguration {
-  static let url = URL(string: "https://wntllezsoavodlrpqcue.supabase.co")!
-  static let publishableKey = "sb_publishable_GOqwNwuuM-X77UWa7MdXTg_4pIiU_7l"
+  static let url = settings.url
+  static let publishableKey = settings.publishableKey
+
+  private static let settings: (url: URL, publishableKey: String) = {
+    #if DEBUG
+      let environment = ProcessInfo.processInfo.environment
+      let address = environment["PAPA_PRICECHECKER_SUPABASE_URL"]
+      let publishableKey = environment["PAPA_PRICECHECKER_SUPABASE_PUBLISHABLE_KEY"]
+      if address != nil || publishableKey != nil {
+        guard let address, let url = URL(string: address), url.scheme == "https", url.host != nil,
+          let key = publishableKey, key.hasPrefix("sb_publishable_")
+        else { preconditionFailure("Set both staging Supabase environment variables.") }
+        return (url, key)
+      }
+    #endif
+    return (
+      URL(string: "https://wntllezsoavodlrpqcue.supabase.co")!,
+      "sb_publishable_GOqwNwuuM-X77UWa7MdXTg_4pIiU_7l"
+    )
+  }()
 }
 
 /// Public, read-only PostgREST access. Database grants and RLS enforce access.
@@ -99,37 +145,73 @@ struct GroceryService {
   private let endpoint = GroceryConfiguration.url.appendingPathComponent("rest/v1")
   static let pageSize = 50
   private static let productSelectColumns =
-    "product_id,name,brand,package_size,price,was_price,is_on_special,promotion,cup_string,is_available,scraped_at,last_seen_at,image_url,url,region"
+    "product_id,chain,name,brand,package_size,price,was_price,is_on_special,promotion,cup_string,is_available,scraped_at,last_seen_at,image_url,url,region"
 
-  func products(search: String, offset: Int) async throws -> [GroceryProduct] {
+  func retailers() async throws -> [GroceryRetailer] {
+    try await get(
+      "retailers",
+      query: [
+        URLQueryItem(name: "select", value: "chain,display_name"),
+        URLQueryItem(name: "enabled", value: "eq.true"),
+        URLQueryItem(name: "order", value: "display_name.asc,chain.asc"),
+      ])
+  }
+
+  func latestCatalogSnapshot(chain: String) async throws -> Date? {
+    // The ingest function writes the product count after processing prices.
+    // The scrape's finish time dates the snapshot even if that run is replayed.
+    let runs: [CompletedScrapeRun] = try await get(
+      "scrape_runs",
+      query: [
+        URLQueryItem(name: "select", value: "finished_at"),
+        URLQueryItem(name: "chain", value: "eq.\(chain)"),
+        URLQueryItem(name: "status", value: "eq.SUCCEEDED"),
+        URLQueryItem(name: "products_upserted", value: "gt.0"),
+        URLQueryItem(name: "finished_at", value: "not.is.null"),
+        URLQueryItem(name: "order", value: "finished_at.desc"),
+        URLQueryItem(name: "limit", value: "1"),
+      ])
+    return runs.first?.finishedAt
+  }
+
+  func products(chain: String, search: String, offset: Int) async throws -> [GroceryProduct] {
     let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    let chainFilter = URLQueryItem(name: "chain", value: "eq.\(chain)")
     if !term.isEmpty {
-      return try await get(
-        "rpc/search_products",
-        query: [
-          URLQueryItem(name: "select", value: Self.productSelectColumns),
-          URLQueryItem(name: "search_text", value: term),
-          URLQueryItem(name: "page_size", value: "\(Self.pageSize)"),
-          URLQueryItem(name: "page_offset", value: "\(offset)"),
-        ])
+      let query = [
+        URLQueryItem(name: "select", value: Self.productSelectColumns),
+        URLQueryItem(name: "search_text", value: term),
+        URLQueryItem(name: "page_size", value: "\(Self.pageSize)"),
+        URLQueryItem(name: "page_offset", value: "\(offset)"),
+      ]
+      do {
+        return try await get(
+          "rpc/search_products_by_chain",
+          query: query + [URLQueryItem(name: "retailer_chain", value: chain)])
+      } catch GroceryError.server(404) where chain == GroceryRetailer.woolworths.chain {
+        // Support the existing Woolworths-only backend during rollout.
+        return try await get("rpc/search_products", query: query + [chainFilter])
+      }
     }
     return try await get(
       "v_latest_prices",
       query: [
         URLQueryItem(name: "select", value: Self.productSelectColumns),
+        chainFilter,
         URLQueryItem(name: "order", value: "name.asc,product_id.asc"),
         URLQueryItem(name: "limit", value: "\(Self.pageSize)"),
         URLQueryItem(name: "offset", value: "\(offset)"),
       ])
   }
 
-  func products(ids: [UUID]) async throws -> [GroceryProduct] {
+  func products(ids: [UUID], chain: String? = nil) async throws -> [GroceryProduct] {
     var seen = Set<UUID>()
     let uniqueIDs = ids.filter { seen.insert($0).inserted }
     guard !uniqueIDs.isEmpty else { return [] }
 
     var collected: [GroceryProduct] = []
     let chunkSize = 100
+    let chainFilter = chain.map { [URLQueryItem(name: "chain", value: "eq.\($0)")] } ?? []
     for start in stride(from: 0, to: uniqueIDs.count, by: chunkSize) {
       let end = min(start + chunkSize, uniqueIDs.count)
       let idList = uniqueIDs[start..<end].map(\.uuidString).joined(separator: ",")
@@ -139,7 +221,7 @@ struct GroceryService {
           URLQueryItem(name: "select", value: Self.productSelectColumns),
           URLQueryItem(name: "product_id", value: "in.(\(idList))"),
           URLQueryItem(name: "order", value: "name.asc,product_id.asc"),
-        ])
+        ] + chainFilter)
       collected.append(contentsOf: page)
     }
     return collected.sorted {
@@ -150,7 +232,7 @@ struct GroceryService {
     }
   }
 
-  func priceChangeSummaries() async throws -> [UUID: PriceChangeSummary] {
+  func priceChangeSummaries(chain: String) async throws -> [UUID: PriceChangeSummary] {
     var grouped: [UUID: [Double?]] = [:]
     var offset = 0
     let pageSize = 1000
@@ -159,6 +241,7 @@ struct GroceryService {
         "price_history",
         query: [
           URLQueryItem(name: "select", value: "product_id,price"),
+          URLQueryItem(name: "chain", value: "eq.\(chain)"),
           URLQueryItem(name: "order", value: "scraped_at.asc,id.asc"),
           URLQueryItem(name: "limit", value: "\(pageSize)"),
           URLQueryItem(name: "offset", value: "\(offset)"),

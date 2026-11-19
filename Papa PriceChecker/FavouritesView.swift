@@ -98,6 +98,7 @@ struct AppleSignInView: View {
 struct FavouritesView: View {
   @Environment(AccountStore.self) private var account
   @Environment(\.dismiss) private var dismiss
+  let retailers: [GroceryRetailer]
   let openProduct: (GroceryProduct) -> Void
   @State private var products: [GroceryProduct] = []
   @State private var loadingProducts = false
@@ -157,9 +158,10 @@ struct FavouritesView: View {
                   VStack(alignment: .leading, spacing: 4) {
                     Text(product.name).font(.subheadline.weight(.semibold)).foregroundStyle(
                       .primary)
-                    if let size = product.packageSize, !size.isEmpty {
-                      Text(size).font(.caption).foregroundStyle(.secondary)
-                    }
+                    let retailer = GroceryRetailer.displayName(for: product.chain, in: retailers)
+                    let details = [retailer, product.packageSize ?? ""].filter { !$0.isEmpty }
+                    Text(details.joined(separator: " · "))
+                      .font(.caption).foregroundStyle(.secondary)
                   }
                   Spacer()
                   Text(product.price.map { $0.formatted(.currency(code: "AUD")) } ?? "—").font(

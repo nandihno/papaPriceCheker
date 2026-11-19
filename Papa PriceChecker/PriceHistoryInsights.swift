@@ -10,23 +10,19 @@ nonisolated enum PriceDirection: String, Equatable, Sendable {
 nonisolated struct PriceChangeSummary: Equatable, Sendable {
   let previousPrice: Double?
   let latestPrice: Double?
-  let snapshotCount: Int
-
-  init(previousPrice: Double?, latestPrice: Double?, snapshotCount: Int) {
+  init(previousPrice: Double?, latestPrice: Double?) {
     self.previousPrice = previousPrice
     self.latestPrice = latestPrice
-    self.snapshotCount = snapshotCount
   }
 
   init(prices: [Double?]) {
-    self.snapshotCount = prices.count
     self.latestPrice = prices.last ?? nil
     self.previousPrice = prices.count >= 2 ? prices[prices.count - 2] : nil
   }
 
-  /// Change between the latest two recorded snapshots when both prices are known.
+  /// Change between the latest and preceding observations when both prices are known.
   var delta: Double? {
-    guard snapshotCount >= 2, let latestPrice, let previousPrice else { return nil }
+    guard let latestPrice, let previousPrice else { return nil }
     return latestPrice - previousPrice
   }
 
@@ -35,6 +31,23 @@ nonisolated struct PriceChangeSummary: Equatable, Sendable {
     if delta > 0.005 { return .increased }
     if delta < -0.005 { return .decreased }
     return .unchanged
+  }
+}
+
+struct UnchangedPriceCheck {
+  let date: Date
+  let price: Double
+}
+
+extension GroceryProduct {
+  var unchangedPriceCheck: UnchangedPriceCheck? {
+    guard let price, let lastSeenAt, lastSeenAt > scrapedAt else { return nil }
+    return UnchangedPriceCheck(date: lastSeenAt, price: price)
+  }
+
+  func latestPriceComparison(recorded: PriceChangeSummary?) -> PriceChangeSummary? {
+    guard let check = unchangedPriceCheck else { return recorded }
+    return PriceChangeSummary(previousPrice: check.price, latestPrice: check.price)
   }
 }
 

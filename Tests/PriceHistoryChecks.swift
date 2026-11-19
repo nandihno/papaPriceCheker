@@ -38,11 +38,13 @@ struct PriceHistoryChecks {
     precondition(empty.lowest == nil && empty.highest == nil && empty.pricedCount == 0)
 
     let rise = PriceChangeSummary(prices: [6.0, 6.7])
-    precondition(rise.direction == .increased && rise.previousPrice == 6.0 && rise.latestPrice == 6.7)
+    precondition(
+      rise.direction == .increased && rise.previousPrice == 6.0 && rise.latestPrice == 6.7)
     precondition(abs((rise.delta ?? 0) - 0.7) < 0.0001)
 
     let drop = PriceChangeSummary(prices: [10.0, 8.0])
-    precondition(drop.direction == .decreased && drop.previousPrice == 10.0 && drop.latestPrice == 8.0)
+    precondition(
+      drop.direction == .decreased && drop.previousPrice == 10.0 && drop.latestPrice == 8.0)
     precondition(abs((drop.delta ?? 0) + 2.0) < 0.0001)
 
     let same = PriceChangeSummary(prices: [5.0, 5.0])
@@ -56,6 +58,38 @@ struct PriceHistoryChecks {
 
     let emptySummary = PriceChangeSummary(prices: [])
     precondition(emptySummary.direction == .singleSnapshot && emptySummary.delta == nil)
+
+    func product(price: String = "6.70", lastSeen: String) throws -> GroceryProduct {
+      let json = """
+        {"product_id":"00000000-0000-0000-0000-000000000005","chain":"aldi","name":"Milk","price":\(price),
+         "is_on_special":false,"scraped_at":"2026-11-02T00:00:00Z","last_seen_at":\(lastSeen)}
+        """
+      return try decoder.decode(GroceryProduct.self, from: Data(json.utf8))
+    }
+
+    let checked = try product(lastSeen: #""2026-11-03T00:00:00Z""#)
+    let retailers = try decoder.decode(
+      [GroceryRetailer].self,
+      from: Data(#"[{"chain":"aldi","display_name":"ALDI"}]"#.utf8)
+    )
+    precondition(checked.chain == retailers.first?.chain)
+    precondition(GroceryRetailer.displayName(for: checked.chain, in: retailers) == "ALDI")
+    precondition(checked.unchangedPriceCheck?.date == checked.lastSeenAt)
+    precondition(checked.unchangedPriceCheck?.price == 6.70)
+    precondition(checked.latestPriceComparison(recorded: rise)?.direction == .unchanged)
+    precondition(checked.latestPriceComparison(recorded: nil)?.direction == .unchanged)
+
+    let sameDay = try product(lastSeen: #""2026-11-02T00:00:00Z""#)
+    let noCheck = try product(lastSeen: "null")
+    let olderCheck = try product(lastSeen: #""2026-11-01T00:00:00Z""#)
+    for candidate in [sameDay, noCheck, olderCheck] {
+      precondition(candidate.unchangedPriceCheck == nil)
+      precondition(candidate.latestPriceComparison(recorded: rise)?.direction == .increased)
+    }
+
+    let unknownPrice = try product(price: "null", lastSeen: #""2026-11-03T00:00:00Z""#)
+    precondition(unknownPrice.unchangedPriceCheck == nil)
+    precondition(unknownPrice.latestPriceComparison(recorded: gap)?.delta == nil)
 
     print("Price-history decoding and insight checks passed.")
   }
