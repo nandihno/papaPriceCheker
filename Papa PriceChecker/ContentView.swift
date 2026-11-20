@@ -2,17 +2,114 @@ import Charts
 import SwiftUI
 import UIKit
 
+private struct RetailerPalette {
+  let brand: Color
+  let brandSurface: Color
+  let heroAccent: Color
+  let heroGradient: LinearGradient
+}
+
 private enum Theme {
-  static let brand = dynamicColor(
+  static let woolworths = RetailerPalette(
+    brand: dynamicColor(
+      light: UIColor(red: 0x12 / 255, green: 0x6B / 255, blue: 0x49 / 255, alpha: 1),
+      dark: UIColor(red: 0x3E / 255, green: 0xE0 / 255, blue: 0x94 / 255, alpha: 1),
+      highContrastLight: UIColor(red: 0x0A / 255, green: 0x4D / 255, blue: 0x34 / 255, alpha: 1),
+      highContrastDark: UIColor(red: 0x6E / 255, green: 0xF0 / 255, blue: 0xB2 / 255, alpha: 1)
+    ),
+    brandSurface: dynamicColor(
+      light: UIColor(red: 0x12 / 255, green: 0x6B / 255, blue: 0x49 / 255, alpha: 0.10),
+      dark: UIColor(red: 0x3E / 255, green: 0xE0 / 255, blue: 0x94 / 255, alpha: 0.15)
+    ),
+    heroAccent: Color(red: 0.83, green: 0.95, blue: 0.47),
+    heroGradient: LinearGradient(
+      colors: [
+        dynamicColor(
+          light: UIColor(red: 0x0B / 255, green: 0x3B / 255, blue: 0x2B / 255, alpha: 1),
+          dark: UIColor(red: 0x09 / 255, green: 0x29 / 255, blue: 0x1E / 255, alpha: 1)
+        ),
+        dynamicColor(
+          light: UIColor(red: 0x16 / 255, green: 0x5B / 255, blue: 0x42 / 255, alpha: 1),
+          dark: UIColor(red: 0x12 / 255, green: 0x45 / 255, blue: 0x32 / 255, alpha: 1)
+        ),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+  )
+
+  static let coles = RetailerPalette(
+    brand: dynamicColor(
+      light: UIColor(red: 0xC8 / 255, green: 0x10 / 255, blue: 0x2E / 255, alpha: 1),
+      dark: UIColor(red: 0xFF / 255, green: 0x5C / 255, blue: 0x6C / 255, alpha: 1),
+      highContrastLight: UIColor(red: 0x9E / 255, green: 0x0B / 255, blue: 0x22 / 255, alpha: 1),
+      highContrastDark: UIColor(red: 0xFF / 255, green: 0x85 / 255, blue: 0x91 / 255, alpha: 1)
+    ),
+    brandSurface: dynamicColor(
+      light: UIColor(red: 0xC8 / 255, green: 0x10 / 255, blue: 0x2E / 255, alpha: 0.10),
+      dark: UIColor(red: 0xFF / 255, green: 0x5C / 255, blue: 0x6C / 255, alpha: 0.16)
+    ),
+    heroAccent: Color(red: 1.0, green: 0.85, blue: 0.56),
+    heroGradient: LinearGradient(
+      colors: [
+        dynamicColor(
+          light: UIColor(red: 0x7A / 255, green: 0x0A / 255, blue: 0x1D / 255, alpha: 1),
+          dark: UIColor(red: 0x59 / 255, green: 0x07 / 255, blue: 0x15 / 255, alpha: 1)
+        ),
+        dynamicColor(
+          light: UIColor(red: 0xC8 / 255, green: 0x10 / 255, blue: 0x2E / 255, alpha: 1),
+          dark: UIColor(red: 0x94 / 255, green: 0x12 / 255, blue: 0x26 / 255, alpha: 1)
+        ),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+  )
+
+  static let aldi = RetailerPalette(
+    brand: dynamicColor(
+      light: UIColor(red: 0x00 / 255, green: 0x44 / 255, blue: 0x9E / 255, alpha: 1),
+      dark: UIColor(red: 0x5C / 255, green: 0xA8 / 255, blue: 0xFF / 255, alpha: 1),
+      highContrastLight: UIColor(red: 0x00 / 255, green: 0x30 / 255, blue: 0x70 / 255, alpha: 1),
+      highContrastDark: UIColor(red: 0x8A / 255, green: 0xC2 / 255, blue: 0xFF / 255, alpha: 1)
+    ),
+    brandSurface: dynamicColor(
+      light: UIColor(red: 0x00 / 255, green: 0x44 / 255, blue: 0x9E / 255, alpha: 0.10),
+      dark: UIColor(red: 0x5C / 255, green: 0xA8 / 255, blue: 0xFF / 255, alpha: 0.16)
+    ),
+    heroAccent: Color(red: 1.0, green: 0.80, blue: 0.0),
+    heroGradient: LinearGradient(
+      colors: [
+        dynamicColor(
+          light: UIColor(red: 0x00 / 255, green: 0x1F / 255, blue: 0x5B / 255, alpha: 1),
+          dark: UIColor(red: 0x00 / 255, green: 0x16 / 255, blue: 0x42 / 255, alpha: 1)
+        ),
+        dynamicColor(
+          light: UIColor(red: 0x00 / 255, green: 0x4B / 255, blue: 0xA8 / 255, alpha: 1),
+          dark: UIColor(red: 0x00 / 255, green: 0x36 / 255, blue: 0x7A / 255, alpha: 1)
+        ),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+  )
+
+  static func palette(for chain: String?) -> RetailerPalette {
+    switch chain?.lowercased() {
+    case "coles": coles
+    case "aldi": aldi
+    default: woolworths
+    }
+  }
+
+  static let brand = woolworths.brand
+  static let brandSurface = woolworths.brandSurface
+
+  static let priceDrop = dynamicColor(
     light: UIColor(red: 0x12 / 255, green: 0x6B / 255, blue: 0x49 / 255, alpha: 1),
     dark: UIColor(red: 0x3E / 255, green: 0xE0 / 255, blue: 0x94 / 255, alpha: 1),
     highContrastLight: UIColor(red: 0x0A / 255, green: 0x4D / 255, blue: 0x34 / 255, alpha: 1),
     highContrastDark: UIColor(red: 0x6E / 255, green: 0xF0 / 255, blue: 0xB2 / 255, alpha: 1)
-  )
-
-  static let brandSurface = dynamicColor(
-    light: UIColor(red: 0x12 / 255, green: 0x6B / 255, blue: 0x49 / 255, alpha: 0.10),
-    dark: UIColor(red: 0x3E / 255, green: 0xE0 / 255, blue: 0x94 / 255, alpha: 0.15)
   )
 
   static let special = dynamicColor(
@@ -42,23 +139,6 @@ private enum Theme {
   static let priceDropColumnSurface = dynamicColor(
     light: UIColor(red: 0xE8 / 255, green: 0xF7 / 255, blue: 0xEE / 255, alpha: 1),
     dark: UIColor(red: 0.08, green: 0.42, blue: 0.28, alpha: 0.30)
-  )
-
-  static let heroAccent = Color(red: 0.83, green: 0.95, blue: 0.47)
-
-  static let heroGradient = LinearGradient(
-    colors: [
-      dynamicColor(
-        light: UIColor(red: 0x0B / 255, green: 0x3B / 255, blue: 0x2B / 255, alpha: 1),
-        dark: UIColor(red: 0x09 / 255, green: 0x29 / 255, blue: 0x1E / 255, alpha: 1)
-      ),
-      dynamicColor(
-        light: UIColor(red: 0x16 / 255, green: 0x5B / 255, blue: 0x42 / 255, alpha: 1),
-        dark: UIColor(red: 0x12 / 255, green: 0x45 / 255, blue: 0x32 / 255, alpha: 1)
-      ),
-    ],
-    startPoint: .topLeading,
-    endPoint: .bottomTrailing
   )
 
   private static func dynamicColor(
@@ -134,11 +214,19 @@ struct ContentView: View {
     let search: String
   }
 
+  private nonisolated struct NavigationGeometry: Hashable, Sendable {
+    let showsSplitView: Bool
+    let isLandscape: Bool
+    let hasDivision: Bool
+  }
+
   @State private var showingFavourites = false
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @ScaledMetric(relativeTo: .subheadline) private var minimumInlineRowWidth = 310.0
+  @FocusState private var searchFocused: Bool
 
   @State private var search = ""
   @State private var retailers: [GroceryRetailer] = [.woolworths]
@@ -150,8 +238,11 @@ struct ContentView: View {
   @State private var changedProducts: [GroceryProduct] = []
   @State private var summaries: [UUID: PriceChangeSummary] = [:]
   @State private var selectedProduct: GroceryProduct?
-  @State private var columnVisibility: NavigationSplitViewVisibility = .all
-  @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
+  @State private var compactPath: [UUID] = []
+  @State private var navigationGeometry = NavigationGeometry(
+    showsSplitView: false, isLandscape: false, hasDivision: false
+  )
+  @State private var stacksProductPrices = true
   @State private var filter: ProductFilter = .all
   @State private var loading = false
   @State private var loadingMore = false
@@ -161,7 +252,13 @@ struct ContentView: View {
 
   private let service = GroceryService()
 
-  private var browseQuery: BrowseQuery { BrowseQuery(chain: retailer.chain, search: search) }
+  private var browseQuery: BrowseQuery {
+    BrowseQuery(
+      chain: retailer.chain,
+      search: search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    )
+  }
+  private var activePalette: RetailerPalette { Theme.palette(for: retailer.chain) }
 
   private var allKnownProducts: [GroceryProduct] {
     guard search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -239,33 +336,68 @@ struct ContentView: View {
   }
 
   var body: some View {
-    NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredColumn) {
-      sidebar
-        .navigationSplitViewColumnWidth(min: 300, ideal: 370, max: 450)
-    } detail: {
-      detailPane
-    }
-    .navigationSplitViewStyle(.balanced)
-    .sheet(isPresented: $showingFavourites) {
-      FavouritesView(retailers: retailers) { product in
-        if let destination = retailers.first(where: { $0.chain == product.chain }) {
-          selectRetailer(destination)
+    let allowsSplitView = horizontalSizeClass == .regular
+    navigation(showsSplitView: navigationGeometry.showsSplitView)
+      .id(navigationGeometry.showsSplitView)
+      .background {
+        // Measure the window without the keyboard so opening search cannot replace its field.
+        Color.clear
+          .onGeometryChange(for: NavigationGeometry.self) { proxy in
+            NavigationGeometry(
+              showsSplitView: allowsSplitView && proxy.size.width >= 600,
+              isLandscape: proxy.size.width > proxy.size.height,
+              hasDivision: !proxy.reservedRegions(kind: .division).isEmpty
+            )
+          } action: { geometry in
+            navigationGeometry = geometry
+          }
+          .ignoresSafeArea(.keyboard, edges: .bottom)
+      }
+      .sheet(isPresented: $showingFavourites) {
+        FavouritesView(retailers: retailers) { product in
+          if let destination = retailers.first(where: { $0.chain == product.chain }) {
+            selectRetailer(destination)
+          }
+          openProduct(product)
         }
-        selectedProduct = product
-        preferredColumn = .detail
+      }
+      .tint(activePalette.brand)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: retailer.chain)
+      .task { await loadRetailers() }
+      .task(id: browseQuery) {
+        do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+        await load(refreshCatalogSnapshot: false)
+      }
+  }
+
+  @ViewBuilder
+  private func navigation(showsSplitView: Bool) -> some View {
+    if showsSplitView {
+      NavigationSplitView {
+        sidebar
+          .navigationSplitViewColumnWidth(min: 280, ideal: 370, max: 450)
+      } detail: {
+        detailPane
+      }
+      .navigationSplitViewStyle(.balanced)
+    } else {
+      NavigationStack(path: $compactPath) {
+        sidebar
+          .navigationDestination(for: UUID.self) { _ in detailPane }
       }
     }
-    .tint(Theme.brand)
-    .task { await loadRetailers() }
-    .task(id: browseQuery) {
-      do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-      await load(refreshCatalogSnapshot: false)
-    }
+  }
+
+  private func openProduct(_ product: GroceryProduct) {
+    searchFocused = false
+    selectedProduct = product
+    compactPath = [product.id]
   }
 
   private var sidebar: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
+        catalogSearchField
         VStack(alignment: .leading, spacing: 8) {
           intro
           if retailers.count > 1 {
@@ -285,7 +417,7 @@ struct ContentView: View {
         }
         VStack(alignment: .leading, spacing: 12) {
           listHeader
-          if loading {
+          if loading && allKnownProducts.isEmpty {
             ProgressView("Finding prices…")
               .frame(maxWidth: .infinity)
               .padding(.vertical, 48)
@@ -333,13 +465,13 @@ struct ContentView: View {
               ForEach(displayedProducts) { product in
                 let isSelected = selectedProduct?.id == product.id
                 Button {
-                  selectedProduct = product
-                  preferredColumn = .detail
+                  openProduct(product)
                 } label: {
                   ProductRow(
                     product: product,
                     summary: summary(for: product),
-                    isSelected: isSelected
+                    isSelected: isSelected,
+                    stacksPrice: stacksProductPrices
                   )
                 }
                 .buttonStyle(.plain)
@@ -373,16 +505,21 @@ struct ContentView: View {
           }
         }
       }
+      .onGeometryChange(for: Bool.self) { proxy in
+        proxy.size.width < minimumInlineRowWidth
+      } action: { isNarrow in
+        stacksProductPrices = isNarrow
+      }
       .padding(.horizontal, 16)
       .padding(.bottom, 32)
       .frame(maxWidth: 760)
       .frame(maxWidth: .infinity)
     }
+    .scrollDismissesKeyboard(.interactively)
     .scrollEdgeEffectStyle(.soft, for: .top)
     .background(Color(uiColor: .systemGroupedBackground))
     .navigationTitle("Price Checker")
     .navigationBarTitleDisplayMode(.inline)
-    .searchable(text: $search, prompt: "Search products")
     .refreshable { await refreshCatalog() }
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
@@ -426,6 +563,37 @@ struct ContentView: View {
     }
   }
 
+  private var catalogSearchField: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "magnifyingglass")
+        .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+      TextField("Search products", text: $search)
+        .focused($searchFocused)
+        .submitLabel(.search)
+        .onSubmit { searchFocused = false }
+        .frame(minHeight: 44)
+      if loading && !allKnownProducts.isEmpty {
+        ProgressView()
+          .controlSize(.small)
+          .accessibilityLabel("Updating results")
+      }
+      if !search.isEmpty {
+        Button("Clear search", systemImage: "xmark.circle.fill") { search = "" }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .frame(minWidth: 44, minHeight: 44)
+      }
+    }
+    .padding(.leading, 12)
+    .padding(.trailing, search.isEmpty ? 12 : 0)
+    .background(
+      Color(uiColor: .secondarySystemGroupedBackground),
+      in: RoundedRectangle(cornerRadius: 12)
+    )
+  }
+
   private var emptyFilterTitle: String {
     switch filter {
     case .all: "No products"
@@ -454,7 +622,7 @@ struct ContentView: View {
         Label("Price Movement Alert", systemImage: "bell.badge.fill")
           .font(.caption.bold())
           .tracking(0.6)
-          .foregroundStyle(Theme.brand)
+          .foregroundStyle(activePalette.brand)
         Spacer()
         Text("Since previous check")
           .font(.caption2)
@@ -467,7 +635,7 @@ struct ContentView: View {
           subtitle: "Reduced",
           count: decreasedCount,
           systemImage: "arrow.down.right.circle.fill",
-          tint: Theme.brand,
+          tint: Theme.priceDrop,
           surface: Theme.priceDropColumnSurface,
           isSelected: filter == .decreased
         ) {
@@ -599,8 +767,8 @@ struct ContentView: View {
         title: "All (\(allKnownProducts.count)\(hasMore ? "+" : ""))",
         systemImage: ProductFilter.all.systemImage,
         selected: filter == .all,
-        activeBackground: Theme.brandSurface,
-        activeForeground: Theme.brand
+        activeBackground: activePalette.brandSurface,
+        activeForeground: activePalette.brand
       ) {
         withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
           filter = .all
@@ -611,7 +779,7 @@ struct ContentView: View {
         systemImage: ProductFilter.decreased.systemImage,
         selected: filter == .decreased,
         activeBackground: Theme.priceDropColumnSurface,
-        activeForeground: Theme.brand
+        activeForeground: Theme.priceDrop
       ) {
         withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
           filter = .decreased
@@ -688,7 +856,7 @@ struct ContentView: View {
             Text("\(allKnownProducts.count)\(hasMore ? "+" : "") items")
               .font(.caption.weight(.semibold))
               .monospacedDigit()
-              .foregroundStyle(Theme.heroAccent)
+              .foregroundStyle(activePalette.heroAccent)
           }
         }
         .padding(.horizontal, 16)
@@ -704,7 +872,7 @@ struct ContentView: View {
               .font(.title3)
               .accessibilityHidden(true)
           }
-          .foregroundStyle(Theme.heroAccent)
+          .foregroundStyle(activePalette.heroAccent)
 
           Text("Know your prices.")
             .font(horizontalSizeClass == .regular ? .title.bold() : .title2.bold())
@@ -732,7 +900,7 @@ struct ContentView: View {
     .foregroundStyle(.white)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      Theme.heroGradient,
+      activePalette.heroGradient,
       in: RoundedRectangle(cornerRadius: isCompactBand ? 16 : 20, style: .continuous)
     )
     .padding(.top, 6)
@@ -802,7 +970,7 @@ struct ContentView: View {
     loadID = UUID()
     loadedQuery = nil
     selectedProduct = nil
-    preferredColumn = .sidebar
+    compactPath = []
     catalogSnapshot = .pending
     baseProducts = []
     changedProducts = []
@@ -943,6 +1111,7 @@ private struct ProductRow: View {
   let product: GroceryProduct
   let summary: PriceChangeSummary?
   let isSelected: Bool
+  let stacksPrice: Bool
 
   private var subtitleText: String? {
     let parts = [product.packageSize, product.cupString]
@@ -953,7 +1122,7 @@ private struct ProductRow: View {
 
   var body: some View {
     Group {
-      if dynamicTypeSize.isAccessibilitySize {
+      if stacksPrice || dynamicTypeSize.isAccessibilitySize {
         VStack(alignment: .leading, spacing: 10) {
           HStack(alignment: .top, spacing: 12) {
             ProductImage(url: product.imageURL, size: 60)
@@ -978,13 +1147,13 @@ private struct ProductRow: View {
     }
     .padding(12)
     .background(
-      isSelected ? Theme.brandSurface : Color(uiColor: .secondarySystemGroupedBackground),
+      isSelected ? Theme.palette(for: product.chain).brandSurface : Color(uiColor: .secondarySystemGroupedBackground),
       in: RoundedRectangle(cornerRadius: 18, style: .continuous)
     )
     .overlay(
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .strokeBorder(
-          isSelected ? Theme.brand.opacity(0.45) : Color.primary.opacity(0.05),
+          isSelected ? Theme.palette(for: product.chain).brand.opacity(0.45) : Color.primary.opacity(0.05),
           lineWidth: isSelected ? 1.5 : 1
         )
     )
@@ -1038,7 +1207,7 @@ private struct ProductRow: View {
       BadgePill(
         title: "Price dropped",
         systemImage: "arrow.down.right.circle.fill",
-        foreground: Theme.brand,
+        foreground: Theme.priceDrop,
         background: Theme.priceDropColumnSurface
       )
     }
@@ -1068,17 +1237,18 @@ private struct ProductRow: View {
       case .decreased: Theme.priceDropColumnSurface
       default: Color(uiColor: .tertiarySystemGroupedBackground)
       }
+    let palette = Theme.palette(for: product.chain)
     let columnBorder: Color =
       switch direction {
       case .increased: Theme.priceRise.opacity(0.28)
-      case .decreased: Theme.brand.opacity(0.28)
+      case .decreased: Theme.priceDrop.opacity(0.28)
       default: Color.primary.opacity(0.06)
       }
     let priceColor: Color =
       switch direction {
       case .increased: Theme.priceRise
-      case .decreased: Theme.brand
-      default: product.price != nil ? Theme.brand : .secondary
+      case .decreased: Theme.priceDrop
+      default: product.price != nil ? palette.brand : .secondary
       }
 
     return VStack(alignment: fullWidth ? .leading : .trailing, spacing: 3) {
@@ -1092,7 +1262,7 @@ private struct ProductRow: View {
           Text("\(direction == .increased ? "+" : "-")\(money(abs(delta)))")
         }
         .font(.caption2.bold().monospacedDigit())
-        .foregroundStyle(direction == .increased ? Theme.priceRise : Theme.brand)
+        .foregroundStyle(direction == .increased ? Theme.priceRise : Theme.priceDrop)
       } else {
         HStack(spacing: 3) {
           Image(systemName: direction == .unchanged ? "equal.circle.fill" : "clock")
@@ -1179,11 +1349,16 @@ private struct ProductDetail: View {
     return product.latestPriceComparison(recorded: recorded ?? summary)
   }
 
+  private var palette: RetailerPalette { Theme.palette(for: product.chain) }
+
   private var chartAccent: Color {
     if priceComparison?.direction == .increased {
       return Theme.priceRise
     }
-    return Theme.brand
+    if priceComparison?.direction == .decreased {
+      return Theme.priceDrop
+    }
+    return palette.brand
   }
 
   enum Period: String, CaseIterable, Identifiable {
@@ -1392,10 +1567,10 @@ private struct ProductDetail: View {
             Text(retailerName.uppercased())
               .font(.caption2.bold())
               .tracking(1)
-              .foregroundStyle(Theme.brand)
+              .foregroundStyle(palette.brand)
               .padding(.horizontal, 8)
               .padding(.vertical, 3)
-              .background(Theme.brandSurface, in: Capsule())
+              .background(palette.brandSurface, in: Capsule())
             if let brand = product.brand, !brand.isEmpty {
               Text(brand)
                 .font(.caption.weight(.medium))
@@ -1446,7 +1621,7 @@ private struct ProductDetail: View {
               : "arrow.down.right.circle.fill"
           )
           .font(.title3)
-          .foregroundStyle(isIncrease ? Theme.priceRise : Theme.brand)
+          .foregroundStyle(isIncrease ? Theme.priceRise : Theme.priceDrop)
 
           VStack(alignment: .leading, spacing: 2) {
             Text(
@@ -1455,7 +1630,7 @@ private struct ProductDetail: View {
                 : "Price reduced by \(money(abs(change)))"
             )
             .font(.subheadline.weight(.semibold).monospacedDigit())
-            .foregroundStyle(isIncrease ? Theme.priceRise : Theme.brand)
+            .foregroundStyle(isIncrease ? Theme.priceRise : Theme.priceDrop)
 
             if let prev = priceComparison?.previousPrice {
               Text("From \(money(prev)) at previous recorded check")
@@ -1473,7 +1648,7 @@ private struct ProductDetail: View {
         .overlay(
           RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(
-              (isIncrease ? Theme.priceRise : Theme.brand).opacity(0.28),
+              (isIncrease ? Theme.priceRise : Theme.priceDrop).opacity(0.28),
               lineWidth: 1
             )
         )
@@ -1631,7 +1806,7 @@ private struct ProductDetail: View {
               "Lowest recorded",
               value: money(lowest),
               systemImage: "arrow.down.circle.fill",
-              tint: Theme.brand
+              tint: Theme.priceDrop
             )
             historyStatistic(
               "Highest recorded",
@@ -1643,7 +1818,7 @@ private struct ProductDetail: View {
               "Latest recorded",
               value: product.price.map(money) ?? "—",
               systemImage: "tag.fill",
-              tint: Theme.brand
+              tint: palette.brand
             )
             historyStatistic(
               "Price snapshots",
@@ -1958,7 +2133,7 @@ private struct HistorySnapshotView: View {
           BadgePill(
             title: "\(isDrop ? "Down" : "Up") \(money(abs(change))) since previous snapshot",
             systemImage: isDrop ? "arrow.down.right.circle.fill" : "arrow.up.right.circle.fill",
-            foreground: isDrop ? Theme.brand : Theme.priceRise,
+            foreground: isDrop ? Theme.priceDrop : Theme.priceRise,
             background: isDrop ? Theme.priceDropColumnSurface : Theme.priceRiseColumnSurface
           )
         }
@@ -1982,7 +2157,7 @@ private struct HistorySnapshotView: View {
       if let savings = record.savingsAmount, savings > 0 {
         Text("Retailer saving: \(money(savings))")
           .font(.caption.weight(.medium).monospacedDigit())
-          .foregroundStyle(Theme.brand)
+          .foregroundStyle(Theme.priceDrop)
       }
 
       DisclosureGroup("Snapshot details") {

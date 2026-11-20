@@ -278,6 +278,21 @@ struct GroceryService {
     }
   }
 
+  private static let fractionalISO8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+  private static let standardISO8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+  private static let decoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .custom { decoder in
+      let value = try decoder.singleValueContainer().decode(String.self)
+      if let date = (try? fractionalISO8601.parse(value)) ?? (try? standardISO8601.parse(value)) {
+        return date
+      }
+      throw DecodingError.dataCorruptedError(
+        in: try decoder.singleValueContainer(), debugDescription: "Invalid timestamp")
+    }
+    return decoder
+  }()
+
   private func get<T: Decodable>(_ table: String, query: [URLQueryItem]) async throws -> T {
     var components = URLComponents(
       url: endpoint.appendingPathComponent(table), resolvingAgainstBaseURL: false)!
@@ -294,17 +309,6 @@ struct GroceryService {
     guard (200..<300).contains(response.statusCode) else {
       throw GroceryError.server(response.statusCode)
     }
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .custom { decoder in
-      let value = try decoder.singleValueContainer().decode(String.self)
-      let fractional = ISO8601DateFormatter()
-      fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-      if let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) {
-        return date
-      }
-      throw DecodingError.dataCorruptedError(
-        in: try decoder.singleValueContainer(), debugDescription: "Invalid timestamp")
-    }
-    return try decoder.decode(T.self, from: data)
+    return try Self.decoder.decode(T.self, from: data)
   }
 }
